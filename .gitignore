@@ -29,4 +29,8 @@ src-tauri/target-rel/
 
 # AI assistant
 .omo/
+.codegraph/
+
+# Backup files
+*.bak
 
