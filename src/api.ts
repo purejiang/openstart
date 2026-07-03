@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Command, CommandStep, TerminalInfo, AppSettings, AppInfo } from "./types";
+import type { Command, CommandStep, TerminalInfo, AppSettings, AppInfo, UpdateInfo } from "./types";
 
 export function detectTerminals(): Promise<TerminalInfo[]> {
   return invoke("detect_terminals");
@@ -81,4 +81,8 @@ export function updateSettings(
 
 export function getAppInfo(): Promise<AppInfo> {
   return invoke("get_app_info");
+}
+
+export function checkUpdate(): Promise<UpdateInfo> {
+  return invoke("check_update");
 }

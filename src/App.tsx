@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import type { Command, CommandStep, TerminalInfo, AppSettings, AppInfo } from "./types";
+import type { Command, CommandStep, TerminalInfo, AppSettings, AppInfo, UpdateInfo } from "./types";
 import {
-  addCommand, deleteCommand, deleteGroup, detectTerminals, executeCommandById, executeGroup,
+  addCommand, checkUpdate, deleteCommand, deleteGroup, detectTerminals, executeCommandById, executeGroup,
   getAppInfo, getSettings, listCommands, updateCommand, updateSettings,
 } from "./api";
 import "./App.css";
@@ -24,7 +24,7 @@ function terminalClass(id: string): string {
   return m[id] ?? "term-default";
 }
 function terminalLabel(term: TerminalInfo): string {
-  const m: Record<string, string> = { powershell: "PowerShell", cmd: "CMD", gitbash: "Git Bash", terminal: "WT" };
+  const m: Record<string, string> = { powershell: "PowerShell", cmd: "CMD", gitbash: "Git Bash", terminal: "Windows Terminal" };
   return m[term.id] ?? term.name;
 }
 
@@ -102,6 +102,7 @@ export default function App() {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [dirty, setDirty] = useState(false);
   const [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -111,9 +112,22 @@ export default function App() {
     } catch (e) { toastMsg("Failed to load: " + String(e), true); }
     finally { setLoading(false); }
   }, []);
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { refresh().then(() => { checkForUpdates(); }); }, [refresh]);
 
   function toastMsg(m: string, e?: boolean) { setToast({ message: m, error: e }); setTimeout(() => setToast(null), 3000); }
+
+  async function checkForUpdates() {
+    try {
+      const info = await checkUpdate();
+      if (info.update_available) {
+        setUpdateInfo(info);
+      } else {
+        toastMsg("You're up to date!");
+      }
+    } catch (e) {
+      toastMsg("Update check failed: " + String(e), true);
+    }
+  }
 
   function openAdd() {
     const t = terminals.length > 0 ? terminals[0].id : "";
@@ -240,6 +254,7 @@ export default function App() {
       <section className="settings-section">
         <h3 className="settings-section-title">About</h3>
         {appInfo && (<div className="settings-info-grid"><span className="info-label">Name</span><span className="info-value">{appInfo.name}</span><span className="info-label">Version</span><span className="info-value">{appInfo.version}</span><span className="info-label">Data</span><span className="info-value info-value-mono">{appInfo.dataDir}</span></div>)}
+        <button className="btn-save" style={{ marginTop: 12 }} onClick={checkForUpdates}>Check for Updates</button>
       </section>
       <section className="settings-section">
         <h3 className="settings-section-title">Startup</h3>
@@ -336,6 +351,13 @@ export default function App() {
       </div></div>)}
 
       {toast && <div className={`toast${toast.error ? " toast-error" : ""}`}>{toast.message}</div>}
+      {updateInfo && updateInfo.update_available && (
+        <div className="toast toast-update">
+          <span>Update available: v{updateInfo.latest_version}</span>
+          <a className="toast-update-link" href={updateInfo.download_url} target="_blank" rel="noreferrer">Download</a>
+          <button className="toast-update-close" onClick={() => setUpdateInfo(null)}>{ICONS.close}</button>
+        </div>
+      )}
     </>
   );
 }

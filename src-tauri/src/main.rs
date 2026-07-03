@@ -12,6 +12,30 @@ fn main() {
         return;
     }
 
+    // Single-instance guard: prevent multiple GUI instances
+    {
+        use windows::Win32::System::Threading::CreateMutexW;
+        use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, ShowWindow, SetForegroundWindow, SW_RESTORE};
+
+        unsafe {
+            let mutex = CreateMutexW(None, true, windows::core::w!("Global\\OpenStart_SingleInstance"))
+                .expect("CreateMutexW failed");
+            if GetLastError() == ERROR_ALREADY_EXISTS {
+                // Find existing "OpenStart" window and bring it to front
+                if let Ok(hwnd) = FindWindowW(None, windows::core::w!("OpenStart")) {
+                    if !hwnd.0.is_null() {
+                        let _ = ShowWindow(hwnd, SW_RESTORE);
+                        let _ = SetForegroundWindow(hwnd);
+                    }
+                }
+                std::process::exit(0);
+            }
+            // Mutex handle lives for process lifetime (HANDLE is Copy, no Drop)
+            let _ = mutex;
+        }
+    }
+
     // GUI mode
     app_lib::run();
 }

@@ -3,12 +3,18 @@ pub mod terminal;
 pub mod autostart;
 pub mod settings;
 pub mod commands;
+pub mod updater;
 
 use commands::AppDataDir;
 use storage::Storage;
 use tauri::Manager;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
+
+#[tauri::command]
+fn check_update() -> Result<updater::UpdateInfo, String> {
+    updater::check_for_updates()
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -98,6 +104,7 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::get_app_info,
+            check_update,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

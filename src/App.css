@@ -332,6 +332,23 @@
   animation:slideUpToast .2s var(--ease-out);
 }
 .toast-error{border-color:var(--danger);background:var(--danger-muted)}
+.toast-update{
+  border-color:var(--accent);background:var(--accent-muted);
+  display:flex;align-items:center;gap:10px;padding:10px 16px;
+  animation:slideUpToast .2s var(--ease-out);
+}
+.toast-update-link{
+  color:var(--accent);font-weight:600;text-decoration:underline;
+  white-space:nowrap;
+}
+.toast-update-link:hover{color:var(--accent-hover)}
+.toast-update-close{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:18px;height:18px;border-radius:50%;
+  color:var(--text-muted);margin-left:4px;flex-shrink:0;
+}
+.toast-update-close:hover{background:var(--bg-elevated);color:var(--text-primary)}
+.toast-update-close svg{width:12px;height:12px}
 @keyframes slideUpToast{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 
 /* ── Settings page ──────────────────────────── */

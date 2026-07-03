@@ -196,7 +196,7 @@ pub fn detect_terminals() -> Vec<TerminalInfo> {
             let shell = profile_shell_type(&profile);
             terminals.push(TerminalInfo {
                 id: format!("terminal:{}", profile.name),
-                name: format!("WT: {}", profile.name),
+                name: format!("Windows Terminal: {}", profile.name),
                 path: String::new(),
                 available: true,
             });

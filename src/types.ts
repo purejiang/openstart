@@ -32,3 +32,11 @@ export interface AppInfo {
   version: string;
   dataDir: string;
 }
+
+export interface UpdateInfo {
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+  download_url: string;
+  release_notes: string;
+}
