@@ -214,31 +214,33 @@ export default function App() {
                   <button className="btn-icon btn-icon-delete" title="Delete group" onClick={() => setDelGroup(gname)}>{ICONS.trash}</button>
                 </div>
                 {!collapsed.has(gname) && (
-                <div className="table-wrapper">
-                  <table className="command-table">
-                    <thead><tr><th className="col-name">Name</th><th className="col-command">Command</th><th className="col-terminal">Terminal</th><th className="col-auto">Auto</th><th className="col-actions">Actions</th></tr></thead>
-                    <tbody>
-                      {gcmds.map(c => {
-                        const t = terminals.find(x => x.id === c.terminal) ?? ({ id: c.terminal, name: c.terminal } as TerminalInfo);
-                        return (
-                          <tr key={c.id}>
-                            <td className="col-name-cell" title={c.name}>{c.name}</td>
-                            <td className="col-command-cell" title={c.steps.length > 0 ? c.steps.map(s => s.cmd).join(" → ") : c.command}>
-                              {c.steps.length > 0 ? c.steps[0].cmd : c.command}
-                              {c.steps.length > 1 && <span className="step-badge">{c.steps.length} steps</span>}
-                            </td>
-                            <td><span className={`terminal-badge ${terminalClass(c.terminal)}`}>{terminalLabel(t)}</span></td>
-                            <td><span className="auto-start-indicator"><span className={`auto-start-dot${c.auto_start ? " active" : ""}`} />{c.auto_start ? "Yes" : "No"}</span></td>
-                            <td><div className="row-actions">
+                <div className="cmd-card-list">
+                  {gcmds.map(c => {
+                    const t = terminals.find(x => x.id === c.terminal) ?? ({ id: c.terminal, name: c.terminal } as TerminalInfo);
+                    return (
+                      <div className="cmd-card" key={c.id}>
+                        <div className="cmd-card-header">
+                          <span className={`auto-start-dot${c.auto_start ? " active" : ""}`} title={c.auto_start ? "Auto-start enabled" : "Auto-start disabled"} />
+                          <span className="cmd-card-name" title={c.name}>{c.name}</span>
+                          <div className="cmd-card-spacer" />
+                          <div className="cmd-card-meta">
+                            <span className={`terminal-badge ${terminalClass(c.terminal)}`} title={terminalLabel(t)}>
+                              {terminalLabel(t)}
+                            </span>
+                            <div className="row-actions">
                               <button className="btn-icon btn-icon-execute" title="Execute" onClick={() => handleExec(c)}>{ICONS.play}</button>
                               <button className="btn-icon btn-icon-edit" title="Edit" onClick={() => openEdit(c)}>{ICONS.edit}</button>
                               <button className="btn-icon btn-icon-delete" title="Delete" onClick={() => setDelId(c.id)}>{ICONS.trash}</button>
-                            </div></td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="cmd-card-command" title={c.steps.length > 0 ? c.steps.map(s => s.cmd).join(" → ") : c.command}>
+                          {c.steps.length > 0 ? c.steps[0].cmd : c.command}
+                          {c.steps.length > 1 && <span className="step-badge">{c.steps.length} steps</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
                 )}
               </div>
@@ -253,11 +255,15 @@ export default function App() {
     <div className="settings-page">
       <section className="settings-section">
         <h3 className="settings-section-title">About</h3>
+        <p className="settings-section-subtitle">Application information and updates</p>
+        <div className="settings-divider" />
         {appInfo && (<div className="settings-info-grid"><span className="info-label">Name</span><span className="info-value">{appInfo.name}</span><span className="info-label">Version</span><span className="info-value">{appInfo.version}</span><span className="info-label">Data</span><span className="info-value info-value-mono">{appInfo.dataDir}</span></div>)}
-        <button className="btn-save" style={{ marginTop: 12 }} onClick={checkForUpdates}>Check for Updates</button>
+        <button className="btn-save btn-update" style={{ marginTop: 16 }} onClick={checkForUpdates}>Check for Updates</button>
       </section>
       <section className="settings-section">
         <h3 className="settings-section-title">Startup</h3>
+        <p className="settings-section-subtitle">Configure auto-launch behavior</p>
+        <div className="settings-divider" />
         <div className="settings-row"><span>Launch at system startup</span><button className={`toggle${appSettings.app_autostart ? " active" : ""}`} onClick={() => { setAppSettings(s => ({ ...s, app_autostart: !s.app_autostart })); setDirty(true); }}><span className="toggle-knob" /></button></div>
         <div className="settings-row"><span>Startup delay (seconds)</span><input type="number" className="settings-input-num" min={0} max={60} value={appSettings.startup_delay_seconds} onChange={e => { setAppSettings(s => ({ ...s, startup_delay_seconds: Number(e.target.value) || 0 })); setDirty(true); }} /></div>
         {dirty && <button className="btn-save" onClick={handleSaveSettings}>Save Settings</button>}
@@ -285,9 +291,10 @@ export default function App() {
             <div className="steps-editor">
               {form.steps.map((step, i) => (
                 <div key={i} className="step-row">
+                  <span className="step-number">{i + 1}</span>
                   <input
                     className="form-input step-cmd-input"
-                    placeholder={`Step ${i + 1} command...`}
+                    placeholder="Command..."
                     value={step.cmd}
                     onChange={e => {
                       const s = [...form.steps];
