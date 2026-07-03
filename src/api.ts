@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Command, TerminalInfo, AppSettings, AppInfo } from "./types";
+import type { Command, CommandStep, TerminalInfo, AppSettings, AppInfo } from "./types";
 
 export function detectTerminals(): Promise<TerminalInfo[]> {
   return invoke("detect_terminals");
@@ -15,8 +15,9 @@ export function addCommand(
   terminal: string,
   autoStart: boolean,
   groupName: string,
+  steps: CommandStep[],
 ): Promise<Command> {
-  return invoke("add_command", { name, command, terminal, autoStart, groupName });
+  return invoke("add_command", { name, command, terminal, autoStart, groupName, steps });
 }
 
 export function updateCommand(
@@ -26,8 +27,13 @@ export function updateCommand(
   terminal: string,
   autoStart: boolean,
   groupName: string,
+  steps: CommandStep[],
 ): Promise<void> {
-  return invoke("update_command", { id, name, command, terminal, autoStart, groupName });
+  return invoke("update_command", { id, name, command, terminal, autoStart, groupName, steps });
+}
+
+export function executeCommandById(id: string): Promise<void> {
+  return invoke("execute_command_by_id", { id });
 }
 
 export function deleteCommand(id: string): Promise<void> {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import type { Command, TerminalInfo, AppSettings, AppInfo } from "./types";
+import type { Command, CommandStep, TerminalInfo, AppSettings, AppInfo } from "./types";
 import {
-  addCommand, deleteCommand, deleteGroup, detectTerminals, executeCommand, executeGroup,
+  addCommand, deleteCommand, deleteGroup, detectTerminals, executeCommandById, executeGroup,
   getAppInfo, getSettings, listCommands, updateCommand, updateSettings,
 } from "./api";
 import "./App.css";
@@ -13,7 +13,7 @@ const ICONS = {
   edit: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>),
   trash: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>),
   close: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>),
-  zap: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>),
+  zap: (<svg viewBox="0 0 1024 1024" width="24" height="24"><path d="M0 0m240 0l544 0q240 0 240 240l0 544q0 240-240 240l-544 0q-240 0-240-240l0-544q0-240 240-240Z" fill="#242938"/><path d="M815.276 275.34l-252.56-149.92a95.16 95.16 0 0 0-97.444 0l-252.56 149.92C182.568 293.24 164 326.3 164 362.088v299.844c0 35.78 18.572 68.86 48.72 86.756l252.56 149.892a95.2 95.2 0 0 0 48.716 13.416 95.2 95.2 0 0 0 48.712-13.416l252.56-149.892c30.144-17.896 48.728-50.976 48.728-86.756v-299.84c0-35.792-18.584-68.856-48.72-86.752" fill="#242938"/><path d="M474.108 883.232l-252.56-149.896c-24.704-14.664-40.052-42.024-40.052-71.408V362.092c0-29.384 15.348-56.744 40.04-71.4l252.572-149.92a78.2 78.2 0 0 1 39.888-10.988c13.98 0 27.772 3.8 39.892 10.988l252.56 149.92c20.816 12.356 34.856 33.752 38.804 57.748-8.376-17.876-27.268-22.736-49.28-9.88l-238.936 147.588c-29.792 17.416-51.76 36.96-51.78 72.884v294.416c-0.016 21.512 8.672 35.444 22.016 39.484-4.384 0.76-8.804 1.288-13.276 1.288a78.2 78.2 0 0 1-39.888-10.988m341.168-607.896l-252.56-149.912A95.2 95.2 0 0 0 513.996 112a95.2 95.2 0 0 0-48.724 13.424l-252.56 149.912C182.568 293.232 164 326.304 164 362.096v299.832c0 35.78 18.572 68.86 48.72 86.756l252.56 149.9A95.36 95.36 0 0 0 513.996 912a95.32 95.32 0 0 0 48.712-13.416l252.568-149.9c30.144-17.896 48.72-50.976 48.72-86.756V362.092c0-35.788-18.576-68.86-48.72-86.756" fill="#FFFFFF"/><path d="M749.068 690.916l-62.888 37.64c-1.668 0.972-2.892 2.064-2.904 4.068v16.456c0 2.012 1.352 2.848 3.016 1.868l63.864-38.812c1.664-0.972 1.92-2.832 1.932-4.836v-14.516c0-2-1.352-2.84-3.02-1.868" fill="#47B353"/><path d="M615.152 552.392c2.036-1.032 3.712 0.236 3.74 2.9l0.212 21.092c0.024 2.668-1.332 4.168-2.992 4.168H387.26c-1.668 0-2.968-1.204-2.968-2.904v-22.34c0-2.664 1.348-4.088 3.016-2.9l19.296 14.16 17.172-13.196 16.156 13.196 17.72-13.196 17.16 13.196 17.16-13.196 17.744 13.196 16.16-13.196 17.72 13.196 16.168-13.196 17.72 13.196 16.176-13.196 17.72 13.196 16.172-13.196 17.712 13.196 16.18-13.196 17.72 13.196 16.18-13.196 17.72 13.196 16.16-13.196 17.72 13.196 16.18-13.196 17.72 13.196 16.18-13.196 17.72 13.196 16.17-13.196 17.71 13.196 16.18-13.196Z" fill="#47B353"/><path d="M378.376 789.322l238.828-147.448c30.148-18.624 48.72-52.312 48.72-88.664V440.418c0-21.812-12.56-34.148-28.472-27.732-10.936 3.988-29.368 18.032-29.42 29.156-0.052 13.12-2.96 178.184-1.712 244.712 1.252 66.528-9.424 57.944-13.788 51.92-4.356-6.024-12.504-19.028-29.736-13.184-17.228 5.852-13.512 22.612-13.588 29.956 0 7.344-18.428 10.156-40.576 15.772s-43.796 14.456-44.396 28.072c-0.6 13.62 24.18 14.932 35 10.58 10.828-4.352 30.768-11.528 49.608-15.448 18.836-3.924 34.092-2.82 48.844 4.648 14.764 7.468 30.668 1.372 30.704-8.548 0.032-9.924 6.48-29.716-24.68-18.568" fill="#FFFFFF"/></svg>),
   terminal: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>),
   gear: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>),
   chevron: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="6 9 12 15 18 9" /></svg>),
@@ -76,8 +76,8 @@ function GroupSelect({ value, groups, onChange }: { value: string; groups: strin
   );
 }
 
-interface CmdForm { name: string; command: string; terminal: string; auto_start: boolean; group_name: string; }
-const EMPTY: CmdForm = { name: "", command: "", terminal: "", auto_start: false, group_name: "" };
+interface CmdForm { name: string; steps: CommandStep[]; terminal: string; auto_start: boolean; group_name: string; }
+const EMPTY: CmdForm = { name: "", steps: [{ cmd: "", delay_sec: 0 }], terminal: "", auto_start: false, group_name: "" };
 
 export default function App() {
   const [page, setPage] = useState<"commands" | "settings">("commands");
@@ -117,31 +117,35 @@ export default function App() {
 
   function openAdd() {
     const t = terminals.length > 0 ? terminals[0].id : "";
-    setForm({ ...EMPTY, terminal: t }); setEditingId(null); setShowForm(true);
+    setForm({ name: "", steps: [{ cmd: "", delay_sec: 0 }], terminal: t, auto_start: false, group_name: "" });
+    setEditingId(null); setShowForm(true);
   }
   function openEdit(c: Command) {
-    setForm({ name: c.name, command: c.command, terminal: c.terminal, auto_start: c.auto_start, group_name: c.group_name });
+    const steps = c.steps.length > 0 ? [...c.steps] : [{ cmd: c.command, delay_sec: 0 }];
+    setForm({ name: c.name, steps, terminal: c.terminal, auto_start: c.auto_start, group_name: c.group_name });
     setEditingId(c.id); setShowForm(true);
   }
   function closeForm() { setShowForm(false); setEditingId(null); }
 
   async function handleSave() {
-    const { name, command, terminal, auto_start, group_name } = form;
+    const { name, steps, terminal, auto_start, group_name } = form;
     if (!name.trim()) { toastMsg("Name required", true); return; }
-    if (!command.trim()) { toastMsg("Command required", true); return; }
+    const validSteps = steps.filter(s => s.cmd.trim());
+    if (validSteps.length === 0) { toastMsg("At least one command required", true); return; }
     if (!terminal) { toastMsg("Terminal required", true); return; }
     try {
+      const cmd = validSteps[0].cmd.trim();
       if (editingId) {
-        await updateCommand(editingId, name.trim(), command.trim(), terminal, auto_start, group_name.trim());
+        await updateCommand(editingId, name.trim(), cmd, terminal, auto_start, group_name.trim(), validSteps);
       } else {
-        await addCommand(name.trim(), command.trim(), terminal, auto_start, group_name.trim());
+        await addCommand(name.trim(), cmd, terminal, auto_start, group_name.trim(), validSteps);
       }
       closeForm(); await refresh();
     } catch (e) { toastMsg("Save failed: " + String(e), true); }
   }
 
   async function handleExec(c: Command) {
-    try { await executeCommand(c.name, c.command, c.terminal); toastMsg(`Executed: ${c.name}`); }
+    try { await executeCommandById(c.id); toastMsg(`Executed: ${c.name}`); }
     catch (e) { toastMsg("Failed: " + String(e), true); }
   }
   async function handleRunGroup(g: string) {
@@ -205,7 +209,10 @@ export default function App() {
                         return (
                           <tr key={c.id}>
                             <td className="col-name-cell" title={c.name}>{c.name}</td>
-                            <td className="col-command-cell" title={c.command}>{c.command}</td>
+                            <td className="col-command-cell" title={c.steps.length > 0 ? c.steps.map(s => s.cmd).join(" → ") : c.command}>
+                              {c.steps.length > 0 ? c.steps[0].cmd : c.command}
+                              {c.steps.length > 1 && <span className="step-badge">{c.steps.length} steps</span>}
+                            </td>
                             <td><span className={`terminal-badge ${terminalClass(c.terminal)}`}>{terminalLabel(t)}</span></td>
                             <td><span className="auto-start-indicator"><span className={`auto-start-dot${c.auto_start ? " active" : ""}`} />{c.auto_start ? "Yes" : "No"}</span></td>
                             <td><div className="row-actions">
@@ -258,7 +265,58 @@ export default function App() {
         <div className="modal-header"><span className="modal-title">{editingId ? "Edit" : "Add"} Command</span><button className="modal-close" onClick={closeForm}>{ICONS.close}</button></div>
         <div className="modal-body">
           <div className="form-group"><label className="form-label" htmlFor="f-name">Name</label><input id="f-name" className="form-input" placeholder="e.g. Start dev" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} autoFocus /></div>
-          <div className="form-group"><label className="form-label" htmlFor="f-cmd">Command</label><input id="f-cmd" className="form-input" placeholder="e.g. npm run dev" value={form.command} onChange={e => setForm(f => ({ ...f, command: e.target.value }))} /></div>
+          <div className="form-group">
+            <label className="form-label">Steps</label>
+            <div className="steps-editor">
+              {form.steps.map((step, i) => (
+                <div key={i} className="step-row">
+                  <input
+                    className="form-input step-cmd-input"
+                    placeholder={`Step ${i + 1} command...`}
+                    value={step.cmd}
+                    onChange={e => {
+                      const s = [...form.steps];
+                      s[i] = { ...s[i], cmd: e.target.value };
+                      setForm(f => ({ ...f, steps: s }));
+                    }}
+                  />
+                  <input
+                    type="number"
+                    className="form-input step-delay-input"
+                    min={0}
+                    max={300}
+                    placeholder="Delay"
+                    title="Delay in seconds after this step"
+                    value={step.delay_sec || ""}
+                    onChange={e => {
+                      const s = [...form.steps];
+                      s[i] = { ...s[i], delay_sec: Number(e.target.value) || 0 };
+                      setForm(f => ({ ...f, steps: s }));
+                    }}
+                  />
+                  <button className="step-btn" title="Move up" disabled={i === 0} onClick={() => {
+                    if (i === 0) return;
+                    const s = [...form.steps];
+                    [s[i - 1], s[i]] = [s[i], s[i - 1]];
+                    setForm(f => ({ ...f, steps: s }));
+                  }}>↑</button>
+                  <button className="step-btn" title="Move down" disabled={i === form.steps.length - 1} onClick={() => {
+                    if (i === form.steps.length - 1) return;
+                    const s = [...form.steps];
+                    [s[i], s[i + 1]] = [s[i + 1], s[i]];
+                    setForm(f => ({ ...f, steps: s }));
+                  }}>↓</button>
+                  <button className="step-btn step-btn-remove" title="Remove" disabled={form.steps.length <= 1} onClick={() => {
+                    const s = form.steps.filter((_, j) => j !== i);
+                    setForm(f => ({ ...f, steps: s.length > 0 ? s : [{ cmd: "", delay_sec: 0 }] }));
+                  }}>✕</button>
+                </div>
+              ))}
+              <button className="step-add-btn" onClick={() => {
+                setForm(f => ({ ...f, steps: [...f.steps, { cmd: "", delay_sec: 0 }] }));
+              }}>+ Add Step</button>
+            </div>
+          </div>
           <div className="form-group"><label className="form-label" htmlFor="f-term">Terminal</label><select id="f-term" className="form-select" value={form.terminal} onChange={e => setForm(f => ({ ...f, terminal: e.target.value }))}><option value="" disabled>Select…</option>{terminals.map(t => (<option key={t.id} value={t.id}>{terminalLabel(t)}</option>))}</select></div>
           <div className="form-group"><label className="form-label" htmlFor="f-grp">Group</label>
                 <GroupSelect value={form.group_name} groups={existingGroups} onChange={v => setForm(f => ({ ...f, group_name: v }))} />

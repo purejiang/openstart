@@ -66,6 +66,7 @@ fn run_cli(args: &[String]) {
                 terminal,
                 auto_start,
                 group_name: String::new(),
+                steps: vec![],
                 created_at: now.clone(),
                 updated_at: now,
             };
@@ -92,8 +93,12 @@ fn run_cli(args: &[String]) {
             match storage.get_auto_start_commands() {
                 Ok(cmds) => {
                     for cmd in &cmds {
-                        println!("Executing: {} ({})", cmd.name, cmd.command);
-                        execute_in_terminal(&cmd.command, &cmd.terminal);
+                        let steps = app_lib::commands::steps_for_command(cmd);
+                        let shell = app_lib::commands::shell_of(&cmd.terminal);
+                        let script = app_lib::commands::build_chained_script(&steps, shell);
+                        let effective_cmd = if script.is_empty() { &cmd.command } else { &script };
+                        println!("Executing: {} ({})", cmd.name, effective_cmd);
+                        run_in_terminal(effective_cmd, &cmd.terminal);
                     }
                 }
                 Err(e) => eprintln!("Error: {}", e),
@@ -129,7 +134,7 @@ fn run_cli(args: &[String]) {
             // Join remaining args as the command string (handles spaces without quoting)
             let command = args[2..].join(" ");
             println!("Executing in {}: {}", terminal, command);
-            execute_in_terminal(&command, terminal);
+            run_in_terminal(&command, terminal);
         }
         "run" => {
             // Execute a saved command by id
@@ -141,8 +146,12 @@ fn run_cli(args: &[String]) {
                 .expect("Failed to open database");
             match storage.get_command(&args[1]) {
                 Ok(cmd) => {
-                    println!("Executing: {} ({})", cmd.name, cmd.command);
-                    execute_in_terminal(&cmd.command, &cmd.terminal);
+                    let steps = app_lib::commands::steps_for_command(&cmd);
+                    let shell = app_lib::commands::shell_of(&cmd.terminal);
+                    let script = app_lib::commands::build_chained_script(&steps, shell);
+                    let effective_cmd = if script.is_empty() { &cmd.command } else { &script };
+                    println!("Executing: {} ({})", cmd.name, effective_cmd);
+                    run_in_terminal(effective_cmd, &cmd.terminal);
                 }
                 Err(e) => eprintln!("Error: {}", e),
             }
@@ -154,63 +163,18 @@ fn run_cli(args: &[String]) {
     }
 }
 
-fn execute_in_terminal(command: &str, terminal: &str) {
-    use std::process::Command;
-
-    let (program, args): (&str, Vec<String>) = match terminal {
-        "powershell" => (
-            "powershell.exe",
-            vec!["-NoExit".into(), "-Command".into(), format!("& {{{}}}", command)],
-        ),
-        "cmd" => (
-            "cmd.exe",
-            vec!["/k".into(), command.to_string()],
-        ),
-        "gitbash" => (
-            "bash.exe",
-            vec!["-i".into(), "-c".into(), command.to_string()],
-        ),
-        t if t.starts_with("terminal") => {
-            let profile_name = if let Some((_, p)) = t.split_once(':') { p } else { "" };
-            if profile_name.is_empty() {
-                (
-                    "wt.exe",
-                    vec!["powershell.exe".into(), "-NoExit".into(), "-Command".into(), format!("& {{{}}}", command)],
-                )
-            } else {
-                let profile = app_lib::terminal::find_wt_profile(profile_name);
-                let shell = profile.as_ref()
-                    .map(|p| app_lib::terminal::profile_shell_type(p))
-                    .unwrap_or("powershell");
-                match shell {
-                    "gitbash" => {
-                        let bash = app_lib::terminal::find_bash_path()
-                            .unwrap_or_else(|| "bash".to_string());
-                        (
-                            "wt.exe",
-                            vec!["-p".into(), profile_name.to_string(), "--".into(), bash, "-i".into(), "-c".into(), command.to_string()],
-                        )
-                    }
-                    "cmd" => (
-                        "wt.exe",
-                        vec!["-p".into(), profile_name.to_string(), "--".into(), "cmd.exe".into(), "/k".into(), command.to_string()],
-                    ),
-                    _ => (
-                        "wt.exe",
-                        vec!["-p".into(), profile_name.to_string(), "--".into(), "powershell.exe".into(), "-NoExit".into(), "-Command".into(), format!("& {{{}}}", command)],
-                    ),
-                }
+fn run_in_terminal(command: &str, terminal: &str) {
+    match app_lib::commands::build_spawn_args(command, terminal) {
+        Ok((program, args)) => {
+            match std::process::Command::new(&program)
+                .args(args.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+                .spawn()
+            {
+                Ok(_) => {}
+                Err(e) => eprintln!("Failed to execute: {}", e),
             }
         }
-        _ => {
-            eprintln!("Unknown terminal: {}", terminal);
-            return;
-        }
-    };
-
-    match Command::new(program).args(&args).spawn() {
-        Ok(_) => {}
-        Err(e) => eprintln!("Failed to execute: {}", e),
+        Err(e) => eprintln!("{}", e),
     }
 }
 

@@ -2,7 +2,7 @@ pub mod storage;
 pub mod terminal;
 pub mod autostart;
 pub mod settings;
-mod commands;
+pub mod commands;
 
 use commands::AppDataDir;
 use storage::Storage;
@@ -58,7 +58,13 @@ pub fn run() {
                 if !auto_cmds.is_empty() {
                     let cmds: Vec<(String, String)> = auto_cmds
                         .iter()
-                        .map(|c| (c.command.clone(), c.terminal.clone()))
+                        .map(|c| {
+                            let steps = commands::steps_for_command(c);
+                            let shell = commands::shell_of(&c.terminal);
+                            let script = commands::build_chained_script(&steps, shell);
+                            let effective_cmd = if script.is_empty() { c.command.clone() } else { script };
+                            (effective_cmd, c.terminal.clone())
+                        })
                         .collect();
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(startup_delay));
@@ -83,6 +89,7 @@ pub fn run() {
             commands::update_command,
             commands::delete_command,
             commands::execute_command,
+            commands::execute_command_by_id,
             commands::execute_group,
             commands::delete_group,
             commands::get_auto_start_commands,

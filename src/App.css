@@ -361,3 +361,82 @@
 .info-label{color:var(--text-muted)}
 .info-value{color:var(--text-primary)}
 .info-value-mono{font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);word-break:break-all}
+
+/* ── Steps Editor ─────────────────────────────────── */
+.steps-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.step-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.step-cmd-input {
+  flex: 1;
+}
+.step-delay-input {
+  width: 80px;
+  flex-shrink: 0;
+}
+.step-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.step-btn:hover:not(:disabled) {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+.step-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.step-btn-remove:hover:not(:disabled) {
+  color: #ef4444;
+  border-color: #ef4444;
+}
+.step-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s;
+  width: 100%;
+}
+.step-add-btn:hover {
+  background: rgba(34, 197, 94, 0.08);
+  border-color: var(--accent);
+}
+.step-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  border-radius: 4px;
+  vertical-align: middle;
+  white-space: nowrap;
+}

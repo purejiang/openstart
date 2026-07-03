@@ -5,6 +5,11 @@ export interface TerminalInfo {
   available: boolean;
 }
 
+export interface CommandStep {
+  cmd: string;
+  delay_sec: number;
+}
+
 export interface Command {
   id: string;
   name: string;
@@ -12,6 +17,7 @@ export interface Command {
   terminal: string;
   auto_start: boolean;
   group_name: string;
+  steps: CommandStep[];
   created_at: string;
   updated_at: string;
 }
