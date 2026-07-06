@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Command, CommandStep, TerminalInfo, AppSettings, AppInfo, UpdateInfo } from "./types";
 import {
   addCommand, checkUpdate, deleteCommand, deleteGroup, detectTerminals, executeCommandById, executeGroup,
-  getAppInfo, getSettings, listCommands, updateCommand, updateSettings,
+  getAppInfo, getSettings, listCommands, readLogs, updateCommand, updateSettings,
 } from "./api";
 import "./App.css";
 
@@ -98,11 +98,13 @@ export default function App() {
       return next;
     });
   }
-  const [appSettings, setAppSettings] = useState<AppSettings>({ app_autostart: false, startup_delay_seconds: 3 });
+  const [appSettings, setAppSettings] = useState<AppSettings>({ app_autostart: false, startup_delay_seconds: 3, close_to_tray: true, keep_terminal_open: true });
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [dirty, setDirty] = useState(false);
   const [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [showLogs, setShowLogs] = useState(false);
+  const [logContent, setLogContent] = useState("");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -158,8 +160,12 @@ export default function App() {
     } catch (e) { toastMsg("Save failed: " + String(e), true); }
   }
 
-  async function handleExec(c: Command) {
-    try { await executeCommandById(c.id); toastMsg(`Executed: ${c.name}`); }
+  async function handleExec(c: Command, groupName?: string) {
+    try {
+      const useExisting = c.terminal.startsWith("terminal");
+      await executeCommandById(c.id, useExisting, useExisting ? (groupName || c.group_name) : undefined);
+      toastMsg(`Executed: ${c.name}`);
+    }
     catch (e) { toastMsg("Failed: " + String(e), true); }
   }
   async function handleRunGroup(g: string) {
@@ -177,7 +183,7 @@ export default function App() {
     catch (e) { toastMsg("Delete group failed: " + String(e), true); }
   }
   async function handleSaveSettings() {
-    try { await updateSettings(appSettings.app_autostart, appSettings.startup_delay_seconds); toastMsg("Saved"); setDirty(false); }
+    try { await updateSettings(appSettings.app_autostart, appSettings.startup_delay_seconds, appSettings.close_to_tray, appSettings.keep_terminal_open); toastMsg("Saved"); setDirty(false); }
     catch (e) { toastMsg("Save failed: " + String(e), true); }
   }
 
@@ -228,7 +234,7 @@ export default function App() {
                               {terminalLabel(t)}
                             </span>
                             <div className="row-actions">
-                              <button className="btn-icon btn-icon-execute" title="Execute" onClick={() => handleExec(c)}>{ICONS.play}</button>
+                              <button className="btn-icon btn-icon-execute" title="Execute" onClick={() => handleExec(c, gname)}>{ICONS.play}</button>
                               <button className="btn-icon btn-icon-edit" title="Edit" onClick={() => openEdit(c)}>{ICONS.edit}</button>
                               <button className="btn-icon btn-icon-delete" title="Delete" onClick={() => setDelId(c.id)}>{ICONS.trash}</button>
                             </div>
@@ -258,16 +264,44 @@ export default function App() {
         <p className="settings-section-subtitle">Application information and updates</p>
         <div className="settings-divider" />
         {appInfo && (<div className="settings-info-grid"><span className="info-label">Name</span><span className="info-value">{appInfo.name}</span><span className="info-label">Version</span><span className="info-value">{appInfo.version}</span><span className="info-label">Data</span><span className="info-value info-value-mono">{appInfo.dataDir}</span></div>)}
-        <button className="btn-save btn-update" style={{ marginTop: 16 }} onClick={checkForUpdates}>Check for Updates</button>
+        <div className="settings-actions">
+          <button className="btn-update" onClick={checkForUpdates}>{ICONS.zap}Check for Updates</button>
+          <button className="btn-ghost" onClick={async () => {
+            try {
+              const logs = await readLogs(200);
+              setLogContent(logs);
+              setShowLogs(true);
+            } catch (e) { toastMsg("Failed to read logs: " + String(e), true); }
+          }}>{ICONS.terminal}View Logs</button>
+        </div>
       </section>
       <section className="settings-section">
         <h3 className="settings-section-title">Startup</h3>
-        <p className="settings-section-subtitle">Configure auto-launch behavior</p>
+        <p className="settings-section-subtitle">Configure launch and terminal behavior</p>
         <div className="settings-divider" />
-        <div className="settings-row"><span>Launch at system startup</span><button className={`toggle${appSettings.app_autostart ? " active" : ""}`} onClick={() => { setAppSettings(s => ({ ...s, app_autostart: !s.app_autostart })); setDirty(true); }}><span className="toggle-knob" /></button></div>
-        <div className="settings-row"><span>Startup delay (seconds)</span><input type="number" className="settings-input-num" min={0} max={60} value={appSettings.startup_delay_seconds} onChange={e => { setAppSettings(s => ({ ...s, startup_delay_seconds: Number(e.target.value) || 0 })); setDirty(true); }} /></div>
-        {dirty && <button className="btn-save" onClick={handleSaveSettings}>Save Settings</button>}
+        <div className="settings-row">
+          <div className="settings-row-text"><span className="settings-row-label">Launch at system startup</span><span className="settings-row-desc">Run OpenStart automatically when Windows starts</span></div>
+          <button className={`toggle${appSettings.app_autostart ? " active" : ""}`} onClick={() => { setAppSettings(s => ({ ...s, app_autostart: !s.app_autostart })); setDirty(true); }}><span className="toggle-knob" /></button>
+        </div>
+        <div className="settings-row">
+          <div className="settings-row-text"><span className="settings-row-label">Minimize to tray on close</span><span className="settings-row-desc">Closing the window hides to tray instead of quitting</span></div>
+          <button className={`toggle${appSettings.close_to_tray ? " active" : ""}`} onClick={() => { setAppSettings(s => ({ ...s, close_to_tray: !s.close_to_tray })); setDirty(true); }}><span className="toggle-knob" /></button>
+        </div>
+        <div className="settings-row">
+          <div className="settings-row-text"><span className="settings-row-label">Keep terminal open after execution</span><span className="settings-row-desc">Terminal stays open when the command finishes</span></div>
+          <button className={`toggle${appSettings.keep_terminal_open ? " active" : ""}`} onClick={() => { setAppSettings(s => ({ ...s, keep_terminal_open: !s.keep_terminal_open })); setDirty(true); }}><span className="toggle-knob" /></button>
+        </div>
+        <div className="settings-row">
+          <div className="settings-row-text"><span className="settings-row-label">Startup delay</span><span className="settings-row-desc">Seconds to wait before auto-running commands</span></div>
+          <input type="number" className="settings-input-num" min={0} max={60} value={appSettings.startup_delay_seconds} onChange={e => { setAppSettings(s => ({ ...s, startup_delay_seconds: Number(e.target.value) || 0 })); setDirty(true); }} />
+        </div>
       </section>
+      {dirty && (
+        <div className="settings-savebar">
+          <span className="settings-savebar-text">You have unsaved changes</span>
+          <button className="btn-save" onClick={handleSaveSettings}>Save Settings</button>
+        </div>
+      )}
     </div>
   );
 
@@ -282,7 +316,7 @@ export default function App() {
       </header>
       <main className="main-content">{page === "commands" ? cmdPage : setPage2}</main>
 
-      {showForm && (<div className="modal-overlay" onClick={closeForm}><div className="modal" onClick={e => e.stopPropagation()}>
+      {showForm && (<div className="modal-overlay"><div className="modal" onClick={e => e.stopPropagation()}>
         <div className="modal-header"><span className="modal-title">{editingId ? "Edit" : "Add"} Command</span><button className="modal-close" onClick={closeForm}>{ICONS.close}</button></div>
         <div className="modal-body">
           <div className="form-group"><label className="form-label" htmlFor="f-name">Name</label><input id="f-name" className="form-input" placeholder="e.g. Start dev" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} autoFocus /></div>
@@ -363,6 +397,26 @@ export default function App() {
           <span>Update available: v{updateInfo.latest_version}</span>
           <a className="toast-update-link" href={updateInfo.download_url} target="_blank" rel="noreferrer">Download</a>
           <button className="toast-update-close" onClick={() => setUpdateInfo(null)}>{ICONS.close}</button>
+        </div>
+      )}
+      {showLogs && (
+        <div className="modal-overlay" onClick={() => setShowLogs(false)}>
+          <div className="modal" style={{ width: 640 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Execution Logs</span>
+              <button className="modal-close" onClick={() => setShowLogs(false)}>{ICONS.close}</button>
+            </div>
+            <div className="modal-body">
+              <pre className="log-viewer">{logContent || "No log entries yet."}</pre>
+              <div className="form-actions">
+                <button className="btn-cancel" onClick={async () => {
+                  try { await navigator.clipboard.writeText(logContent); toastMsg("Logs copied"); }
+                  catch { toastMsg("Copy failed", true); }
+                }}>Copy</button>
+                <button className="btn-save" onClick={() => setShowLogs(false)}>Close</button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </>

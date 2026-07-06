@@ -193,16 +193,12 @@ pub fn detect_terminals() -> Vec<TerminalInfo> {
 
         // Read WT config and add one entry per non-hidden profile
         for profile in read_wt_profiles() {
-            let shell = profile_shell_type(&profile);
             terminals.push(TerminalInfo {
                 id: format!("terminal:{}", profile.name),
                 name: format!("Windows Terminal: {}", profile.name),
                 path: String::new(),
                 available: true,
             });
-            // Store shell type info via the id suffix for later lookup,
-            // but we don't strictly need this; profile_shell_type() can be called later.
-            let _ = shell;
         }
     }
 

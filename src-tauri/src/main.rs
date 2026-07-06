@@ -117,9 +117,9 @@ fn run_cli(args: &[String]) {
             match storage.get_auto_start_commands() {
                 Ok(cmds) => {
                     for cmd in &cmds {
-                        let steps = app_lib::commands::steps_for_command(cmd);
-                        let shell = app_lib::commands::shell_of(&cmd.terminal);
-                        let script = app_lib::commands::build_chained_script(&steps, shell);
+                        let steps = app_lib::script::steps_for_command(cmd);
+                        let shell = app_lib::script::shell_of(&cmd.terminal);
+                        let script = app_lib::script::build_chained_script(&steps, shell);
                         let effective_cmd = if script.is_empty() { &cmd.command } else { &script };
                         println!("Executing: {} ({})", cmd.name, effective_cmd);
                         run_in_terminal(effective_cmd, &cmd.terminal);
@@ -170,9 +170,9 @@ fn run_cli(args: &[String]) {
                 .expect("Failed to open database");
             match storage.get_command(&args[1]) {
                 Ok(cmd) => {
-                    let steps = app_lib::commands::steps_for_command(&cmd);
-                    let shell = app_lib::commands::shell_of(&cmd.terminal);
-                    let script = app_lib::commands::build_chained_script(&steps, shell);
+                    let steps = app_lib::script::steps_for_command(&cmd);
+                    let shell = app_lib::script::shell_of(&cmd.terminal);
+                    let script = app_lib::script::build_chained_script(&steps, shell);
                     let effective_cmd = if script.is_empty() { &cmd.command } else { &script };
                     println!("Executing: {} ({})", cmd.name, effective_cmd);
                     run_in_terminal(effective_cmd, &cmd.terminal);
@@ -188,7 +188,7 @@ fn run_cli(args: &[String]) {
 }
 
 fn run_in_terminal(command: &str, terminal: &str) {
-    match app_lib::commands::build_spawn_args(command, terminal) {
+    match app_lib::script::build_spawn_args(command, terminal, false, None) {
         Ok((program, args)) => {
             match std::process::Command::new(&program)
                 .args(args.iter().map(|s| s.as_str()).collect::<Vec<_>>())

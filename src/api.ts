@@ -32,8 +32,8 @@ export function updateCommand(
   return invoke("update_command", { id, name, command, terminal, autoStart, groupName, steps });
 }
 
-export function executeCommandById(id: string): Promise<void> {
-  return invoke("execute_command_by_id", { id });
+export function executeCommandById(id: string, useExistingWindow?: boolean, groupName?: string): Promise<void> {
+  return invoke("execute_command_by_id", { id, useExistingWindow: useExistingWindow ?? false, groupName: groupName ?? null });
 }
 
 export function deleteCommand(id: string): Promise<void> {
@@ -75,8 +75,10 @@ export function getSettings(): Promise<AppSettings> {
 export function updateSettings(
   appAutostart: boolean,
   startupDelaySeconds: number,
+  closeToTray: boolean,
+  keepTerminalOpen: boolean,
 ): Promise<void> {
-  return invoke("update_settings", { appAutostart, startupDelaySeconds });
+  return invoke("update_settings", { appAutostart, startupDelaySeconds, closeToTray, keepTerminalOpen });
 }
 
 export function getAppInfo(): Promise<AppInfo> {
@@ -85,4 +87,8 @@ export function getAppInfo(): Promise<AppInfo> {
 
 export function checkUpdate(): Promise<UpdateInfo> {
   return invoke("check_update");
+}
+
+export function readLogs(maxLines?: number): Promise<string> {
+  return invoke("read_logs", { maxLines: maxLines ?? null });
 }

@@ -3,17 +3,25 @@ pub mod terminal;
 pub mod autostart;
 pub mod settings;
 pub mod commands;
+pub mod script;
 pub mod updater;
+pub mod logger;
 
 use commands::AppDataDir;
 use storage::Storage;
 use tauri::Manager;
+use tauri::State;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 
 #[tauri::command]
 fn check_update() -> Result<updater::UpdateInfo, String> {
     updater::check_for_updates()
+}
+
+#[tauri::command]
+fn read_logs(data_dir: State<'_, AppDataDir>, max_lines: Option<usize>) -> Result<String, String> {
+    logger::read_logs(&data_dir.0, max_lines.unwrap_or(200))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -24,8 +32,13 @@ pub fn run() {
 
     std::fs::create_dir_all(&app_data_dir).expect("Failed to create app data directory");
 
+    logger::init_logger(&app_data_dir);
+
     let storage =
         Storage::new(&app_data_dir).expect("Failed to initialize database");
+
+    // Clone before moving into AppDataDir state
+    let close_data_dir = app_data_dir.clone();
 
     // Load settings for startup delay
     let app_settings = settings::load_settings(&app_data_dir);
@@ -65,16 +78,16 @@ pub fn run() {
                     let cmds: Vec<(String, String)> = auto_cmds
                         .iter()
                         .map(|c| {
-                            let steps = commands::steps_for_command(c);
-                            let shell = commands::shell_of(&c.terminal);
-                            let script = commands::build_chained_script(&steps, shell);
-                            let effective_cmd = if script.is_empty() { c.command.clone() } else { script };
+                            let steps = script::steps_for_command(c);
+                            let shell = script::shell_of(&c.terminal);
+                            let chained = script::build_chained_script(&steps, shell);
+                            let effective_cmd = if chained.is_empty() { c.command.clone() } else { chained };
                             (effective_cmd, c.terminal.clone())
                         })
                         .collect();
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(startup_delay));
-                        let _ = commands::spawn_terminal_batch(&cmds);
+                        let _ = script::spawn_terminal_batch(&cmds, "");
                     });
                 }
             }
@@ -105,11 +118,16 @@ pub fn run() {
             commands::update_settings,
             commands::get_app_info,
             check_update,
+            read_logs,
         ])
-        .on_window_event(|window, event| {
+        .on_window_event(move |window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
+                let settings = settings::load_settings(&close_data_dir);
+                if settings.close_to_tray {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+                // else: close proceeds normally → app exits
             }
         })
         .run(tauri::generate_context!())

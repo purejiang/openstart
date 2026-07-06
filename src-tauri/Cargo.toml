@@ -1,6 +1,6 @@
 [package]
 name = "openstart"
-version = "1.0.2"
+version = "1.0.3"
 description = "Startup command launcher for Windows"
 authors = ["you"]
 license = "MIT"

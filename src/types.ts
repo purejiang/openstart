@@ -25,6 +25,8 @@ export interface Command {
 export interface AppSettings {
   app_autostart: boolean;
   startup_delay_seconds: number;
+  close_to_tray: boolean;
+  keep_terminal_open: boolean;
 }
 
 export interface AppInfo {
