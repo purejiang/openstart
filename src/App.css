@@ -479,7 +479,7 @@
 .steps-editor{display:flex;flex-direction:column;gap:8px}
 .step-row{display:flex;flex-direction:column;gap:6px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:12px;transition:border-color .15s}
 .step-row:focus-within{border-color:var(--accent-border)}
-.step-row.dragging{opacity:.5;box-shadow:var(--shadow-md);z-index:100}
+.step-row.dragging{opacity:.6;box-shadow:var(--shadow-md);z-index:100}
 .step-row-top{display:flex;gap:6px;align-items:center;width:100%}
 .step-drag-handle{
   display:flex;align-items:center;justify-content:center;
@@ -490,6 +490,7 @@
   flex-shrink:0;user-select:none;
 }
 .step-drag-handle:hover{color:var(--text-secondary);background:var(--bg-elevated)}
+.step-drag-handle:active{cursor:grabbing}
 .step-number{
   display:flex;align-items:center;justify-content:center;
   width:22px;height:22px;border-radius:50%;

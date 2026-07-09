@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
-import type { DragEndEvent } from "@dnd-kit/core";
-import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
+import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
+import type { DropResult } from "@hello-pangea/dnd";
 import type { Command, CommandStep, TerminalInfo, AppSettings, AppInfo, UpdateInfo } from "./types";
 import {
   addCommand, checkUpdate, deleteCommand, deleteGroup, detectTerminals, executeCommandById, executeGroup,
@@ -89,63 +88,7 @@ function GroupSelect({ value, groups, onChange }: { value: string; groups: strin
 interface CmdForm { name: string; steps: CommandStep[]; terminal: string; auto_start: boolean; group_name: string; note: string; }
 const EMPTY: CmdForm = { name: "", steps: [{ cmd: "", delay_sec: 0, note: "" }], terminal: "", auto_start: false, group_name: "", note: "" };
 
-function SortableStep({ id, index, step, form, setForm, setStepIds }: {
-  id: string; index: number; step: CommandStep;
-  form: CmdForm; setForm: (f: CmdForm | ((prev: CmdForm) => CmdForm)) => void;
-  setStepIds: (ids: string[] | ((prev: string[]) => string[])) => void;
-}) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
-  const style = { transform: `translate3d(${transform?.x ?? 0}px, ${transform?.y ?? 0}px, 0)`, transition };
 
-  return (
-    <div className={`step-row${isDragging ? " dragging" : ""}`} ref={setNodeRef} style={style}>
-      <div className="step-row-top">
-        <button className="step-drag-handle" {...listeners} {...attributes} title="Drag to reorder">⠿</button>
-        <span className="step-number">{index + 1}</span>
-        <input
-          className="form-input step-cmd-input"
-          placeholder="Command..."
-          value={step.cmd}
-          onChange={e => {
-            const s = [...form.steps];
-            s[index] = { ...s[index], cmd: e.target.value };
-            setForm(f => ({ ...f, steps: s }));
-          }}
-        />
-        <input
-          type="number"
-          className="form-input step-delay-input"
-          min={0}
-          max={300}
-          placeholder="Delay"
-          title="Delay in seconds after this step"
-          value={step.delay_sec || ""}
-          onChange={e => {
-            const s = [...form.steps];
-            s[index] = { ...s[index], delay_sec: Number(e.target.value) || 0 };
-            setForm(f => ({ ...f, steps: s }));
-          }}
-        />
-        <span className="step-delay-unit">s</span>
-        <button className="step-btn step-btn-remove" title="Remove" disabled={form.steps.length <= 1} onClick={() => {
-          const s = form.steps.filter((_, j) => j !== index);
-          setForm(f => ({ ...f, steps: s.length > 0 ? s : [{ cmd: "", delay_sec: 0, note: "" }] }));
-          setStepIds(ids => ids.filter((_, j) => j !== index));
-        }}>✕</button>
-      </div>
-      <input
-        className="step-note-input"
-        placeholder="Note (optional)…"
-        value={step.note ?? ""}
-        onChange={e => {
-          const s = [...form.steps];
-          s[index] = { ...s[index], note: e.target.value };
-          setForm(f => ({ ...f, steps: s }));
-        }}
-      />
-    </div>
-  );
-}
 
 export default function App() {
   const [page, setPage] = useState<"commands" | "settings">("commands");
@@ -184,10 +127,25 @@ export default function App() {
   const [showLogs, setShowLogs] = useState(false);
   const [logContent, setLogContent] = useState("");
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
-  );
+  function handleDragEnd(result: DropResult) {
+    if (!result.destination) return;
+    const sourceIndex = result.source.index;
+    const destIndex = result.destination.index;
+    if (sourceIndex === destIndex) return;
+
+    setForm(f => {
+      const s = [...f.steps];
+      const [removed] = s.splice(sourceIndex, 1);
+      s.splice(destIndex, 0, removed);
+      return { ...f, steps: s };
+    });
+    setStepIds(ids => {
+      const arr = [...ids];
+      const [removed] = arr.splice(sourceIndex, 1);
+      arr.splice(destIndex, 0, removed);
+      return arr;
+    });
+  }
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -227,18 +185,6 @@ export default function App() {
     setEditingId(c.id); setShowForm(true);
   }
   function closeForm() { setShowForm(false); setEditingId(null); }
-
-  function handleDragEnd(event: DragEndEvent) {
-    const { active, over } = event;
-    if (over && active.id !== over.id) {
-      const oldIndex = stepIds.indexOf(String(active.id));
-      const newIndex = stepIds.indexOf(String(over.id));
-      if (oldIndex !== -1 && newIndex !== -1) {
-        setForm(f => ({ ...f, steps: arrayMove(f.steps, oldIndex, newIndex) }));
-        setStepIds(ids => arrayMove(ids, oldIndex, newIndex));
-      }
-    }
-  }
 
   async function handleSave() {
     const { name, steps, terminal, auto_start, group_name, note } = form;
@@ -459,19 +405,52 @@ export default function App() {
           </div>
           <div className="form-group">
             <label className="form-label">Steps</label>
-            <div className="steps-editor">
-              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                <SortableContext items={stepIds} strategy={verticalListSortingStrategy}>
-                  {form.steps.map((step, i) => (
-                    <SortableStep key={stepIds[i]} id={stepIds[i]} index={i} step={step} form={form} setForm={setForm} setStepIds={setStepIds} />
-                  ))}
-                </SortableContext>
-              </DndContext>
-              <button className="step-add-btn" onClick={() => {
-                setForm(f => ({ ...f, steps: [...f.steps, { cmd: "", delay_sec: 0, note: "" }] }));
-                setStepIds(ids => [...ids, crypto.randomUUID()]);
-              }}>+ Add Step</button>
-            </div>
+            <DragDropContext onDragEnd={handleDragEnd}>
+              <Droppable droppableId="steps">
+                {(provided) => (
+                  <div className="steps-editor" ref={provided.innerRef} {...provided.droppableProps}>
+                    {form.steps.map((step, i) => (
+                      <Draggable key={stepIds[i]} draggableId={stepIds[i]} index={i}>
+                        {(provided, snapshot) => (
+                          <div
+                            className={`step-row${snapshot.isDragging ? " dragging" : ""}`}
+                            ref={provided.innerRef}
+                            {...provided.draggableProps}
+                          >
+                            <div className="step-row-top">
+                              <div className="step-drag-handle" {...provided.dragHandleProps} title="Drag to reorder">⠿</div>
+                              <span className="step-number">{i + 1}</span>
+                              <input className="form-input step-cmd-input" placeholder="Command..." value={step.cmd}
+                                onChange={e => { const s = [...form.steps]; s[i] = { ...s[i], cmd: e.target.value }; setForm(f => ({ ...f, steps: s })); }}
+                              />
+                              <input type="number" className="form-input step-delay-input" min={0} max={300} placeholder="Delay"
+                                title="Delay in seconds after this step" value={step.delay_sec || ""}
+                                onChange={e => { const s = [...form.steps]; s[i] = { ...s[i], delay_sec: Number(e.target.value) || 0 }; setForm(f => ({ ...f, steps: s })); }}
+                              />
+                              <span className="step-delay-unit">s</span>
+                              <button className="step-btn step-btn-remove" title="Remove" disabled={form.steps.length <= 1}
+                                onClick={() => {
+                                  const s = form.steps.filter((_, j) => j !== i);
+                                  setForm(f => ({ ...f, steps: s.length > 0 ? s : [{ cmd: "", delay_sec: 0, note: "" }] }));
+                                  setStepIds(ids => ids.filter((_, j) => j !== i));
+                                }}>✕</button>
+                            </div>
+                            <input className="step-note-input" placeholder="Note (optional)…" value={step.note ?? ""}
+                              onChange={e => { const s = [...form.steps]; s[i] = { ...s[i], note: e.target.value }; setForm(f => ({ ...f, steps: s })); }}
+                            />
+                          </div>
+                        )}
+                      </Draggable>
+                    ))}
+                    {provided.placeholder}
+                  </div>
+                )}
+              </Droppable>
+            </DragDropContext>
+            <button className="step-add-btn" onClick={() => {
+              setForm(f => ({ ...f, steps: [...f.steps, { cmd: "", delay_sec: 0, note: "" }] }));
+              setStepIds(ids => [...ids, crypto.randomUUID()]);
+            }}>+ Add Step</button>
           </div>
           <div className="form-group"><label className="form-label" htmlFor="f-term">Terminal</label><select id="f-term" className="form-select" value={form.terminal} onChange={e => setForm(f => ({ ...f, terminal: e.target.value }))}><option value="" disabled>Select…</option>{terminals.map(t => (<option key={t.id} value={t.id}>{terminalLabel(t)}</option>))}</select></div>
           <div className="form-group"><label className="form-label" htmlFor="f-grp">Group</label>
