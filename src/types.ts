@@ -8,6 +8,7 @@ export interface TerminalInfo {
 export interface CommandStep {
   cmd: string;
   delay_sec: number;
+  note?: string;
 }
 
 export interface Command {
@@ -18,6 +19,8 @@ export interface Command {
   auto_start: boolean;
   group_name: string;
   steps: CommandStep[];
+  note: string;
+  last_executed_at: string;
   created_at: string;
   updated_at: string;
 }

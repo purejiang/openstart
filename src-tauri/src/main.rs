@@ -93,6 +93,8 @@ fn run_cli(args: &[String]) {
                 steps: vec![],
                 created_at: now.clone(),
                 updated_at: now,
+                note: String::new(),
+                last_executed_at: String::new(),
             };
             match storage.add_command(&cmd) {
                 Ok(()) => println!("Added command: {} ({})", cmd.name, cmd.id),
@@ -123,6 +125,7 @@ fn run_cli(args: &[String]) {
                         let effective_cmd = if script.is_empty() { &cmd.command } else { &script };
                         println!("Executing: {} ({})", cmd.name, effective_cmd);
                         run_in_terminal(effective_cmd, &cmd.terminal);
+                        let _ = storage.update_last_executed(&cmd.id);
                     }
                 }
                 Err(e) => eprintln!("Error: {}", e),
@@ -176,6 +179,7 @@ fn run_cli(args: &[String]) {
                     let effective_cmd = if script.is_empty() { &cmd.command } else { &script };
                     println!("Executing: {} ({})", cmd.name, effective_cmd);
                     run_in_terminal(effective_cmd, &cmd.terminal);
+                    let _ = storage.update_last_executed(&args[1]);
                 }
                 Err(e) => eprintln!("Error: {}", e),
             }

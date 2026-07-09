@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
+import type { DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
 import type { Command, CommandStep, TerminalInfo, AppSettings, AppInfo, UpdateInfo } from "./types";
 import {
   addCommand, checkUpdate, deleteCommand, deleteGroup, detectTerminals, executeCommandById, executeGroup,
@@ -26,6 +29,13 @@ function terminalClass(id: string): string {
 function terminalLabel(term: TerminalInfo): string {
   const m: Record<string, string> = { powershell: "PowerShell", cmd: "CMD", gitbash: "Git Bash", terminal: "Windows Terminal" };
   return m[term.id] ?? term.name;
+}
+
+function fmtDate(s: string): string {
+  if (!s) return "-";
+  const d = new Date(s);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 /* ── Group Selector ──────────────────────────────── */
@@ -76,8 +86,66 @@ function GroupSelect({ value, groups, onChange }: { value: string; groups: strin
   );
 }
 
-interface CmdForm { name: string; steps: CommandStep[]; terminal: string; auto_start: boolean; group_name: string; }
-const EMPTY: CmdForm = { name: "", steps: [{ cmd: "", delay_sec: 0 }], terminal: "", auto_start: false, group_name: "" };
+interface CmdForm { name: string; steps: CommandStep[]; terminal: string; auto_start: boolean; group_name: string; note: string; }
+const EMPTY: CmdForm = { name: "", steps: [{ cmd: "", delay_sec: 0, note: "" }], terminal: "", auto_start: false, group_name: "", note: "" };
+
+function SortableStep({ id, index, step, form, setForm, setStepIds }: {
+  id: string; index: number; step: CommandStep;
+  form: CmdForm; setForm: (f: CmdForm | ((prev: CmdForm) => CmdForm)) => void;
+  setStepIds: (ids: string[] | ((prev: string[]) => string[])) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = { transform: `translate3d(${transform?.x ?? 0}px, ${transform?.y ?? 0}px, 0)`, transition };
+
+  return (
+    <div className={`step-row${isDragging ? " dragging" : ""}`} ref={setNodeRef} style={style}>
+      <div className="step-row-top">
+        <button className="step-drag-handle" {...listeners} {...attributes} title="Drag to reorder">⠿</button>
+        <span className="step-number">{index + 1}</span>
+        <input
+          className="form-input step-cmd-input"
+          placeholder="Command..."
+          value={step.cmd}
+          onChange={e => {
+            const s = [...form.steps];
+            s[index] = { ...s[index], cmd: e.target.value };
+            setForm(f => ({ ...f, steps: s }));
+          }}
+        />
+        <input
+          type="number"
+          className="form-input step-delay-input"
+          min={0}
+          max={300}
+          placeholder="Delay"
+          title="Delay in seconds after this step"
+          value={step.delay_sec || ""}
+          onChange={e => {
+            const s = [...form.steps];
+            s[index] = { ...s[index], delay_sec: Number(e.target.value) || 0 };
+            setForm(f => ({ ...f, steps: s }));
+          }}
+        />
+        <span className="step-delay-unit">s</span>
+        <button className="step-btn step-btn-remove" title="Remove" disabled={form.steps.length <= 1} onClick={() => {
+          const s = form.steps.filter((_, j) => j !== index);
+          setForm(f => ({ ...f, steps: s.length > 0 ? s : [{ cmd: "", delay_sec: 0, note: "" }] }));
+          setStepIds(ids => ids.filter((_, j) => j !== index));
+        }}>✕</button>
+      </div>
+      <input
+        className="step-note-input"
+        placeholder="Note (optional)…"
+        value={step.note ?? ""}
+        onChange={e => {
+          const s = [...form.steps];
+          s[index] = { ...s[index], note: e.target.value };
+          setForm(f => ({ ...f, steps: s }));
+        }}
+      />
+    </div>
+  );
+}
 
 export default function App() {
   const [page, setPage] = useState<"commands" | "settings">("commands");
@@ -87,9 +155,19 @@ export default function App() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<CmdForm>(EMPTY);
+  const [stepIds, setStepIds] = useState<string[]>([]);
   const [delId, setDelId] = useState<string | null>(null);
   const [delGroup, setDelGroup] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
+
+  function toggleExpand(id: string) {
+    setExpandedCards(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
 
   function toggleGroup(g: string) {
     setCollapsed(prev => {
@@ -105,6 +183,11 @@ export default function App() {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [showLogs, setShowLogs] = useState(false);
   const [logContent, setLogContent] = useState("");
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -133,18 +216,32 @@ export default function App() {
 
   function openAdd() {
     const t = terminals.length > 0 ? terminals[0].id : "";
-    setForm({ name: "", steps: [{ cmd: "", delay_sec: 0 }], terminal: t, auto_start: false, group_name: "" });
+    setForm({ name: "", steps: [{ cmd: "", delay_sec: 0, note: "" }], terminal: t, auto_start: false, group_name: "", note: "" });
+    setStepIds([crypto.randomUUID()]);
     setEditingId(null); setShowForm(true);
   }
   function openEdit(c: Command) {
-    const steps = c.steps.length > 0 ? [...c.steps] : [{ cmd: c.command, delay_sec: 0 }];
-    setForm({ name: c.name, steps, terminal: c.terminal, auto_start: c.auto_start, group_name: c.group_name });
+    const steps = c.steps.length > 0 ? c.steps.map(s => ({ cmd: s.cmd, delay_sec: s.delay_sec, note: s.note ?? "" })) : [{ cmd: c.command, delay_sec: 0, note: "" }];
+    setForm({ name: c.name, steps, terminal: c.terminal, auto_start: c.auto_start, group_name: c.group_name, note: c.note ?? "" });
+    setStepIds(steps.map(() => crypto.randomUUID()));
     setEditingId(c.id); setShowForm(true);
   }
   function closeForm() { setShowForm(false); setEditingId(null); }
 
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      const oldIndex = stepIds.indexOf(String(active.id));
+      const newIndex = stepIds.indexOf(String(over.id));
+      if (oldIndex !== -1 && newIndex !== -1) {
+        setForm(f => ({ ...f, steps: arrayMove(f.steps, oldIndex, newIndex) }));
+        setStepIds(ids => arrayMove(ids, oldIndex, newIndex));
+      }
+    }
+  }
+
   async function handleSave() {
-    const { name, steps, terminal, auto_start, group_name } = form;
+    const { name, steps, terminal, auto_start, group_name, note } = form;
     if (!name.trim()) { toastMsg("Name required", true); return; }
     const validSteps = steps.filter(s => s.cmd.trim());
     if (validSteps.length === 0) { toastMsg("At least one command required", true); return; }
@@ -152,9 +249,9 @@ export default function App() {
     try {
       const cmd = validSteps[0].cmd.trim();
       if (editingId) {
-        await updateCommand(editingId, name.trim(), cmd, terminal, auto_start, group_name.trim(), validSteps);
+        await updateCommand(editingId, name.trim(), cmd, terminal, auto_start, group_name.trim(), validSteps, note.trim());
       } else {
-        await addCommand(name.trim(), cmd, terminal, auto_start, group_name.trim(), validSteps);
+        await addCommand(name.trim(), cmd, terminal, auto_start, group_name.trim(), validSteps, note.trim());
       }
       closeForm(); await refresh();
     } catch (e) { toastMsg("Save failed: " + String(e), true); }
@@ -165,11 +262,12 @@ export default function App() {
       const useExisting = c.terminal.startsWith("terminal");
       await executeCommandById(c.id, useExisting, useExisting ? (groupName || c.group_name) : undefined);
       toastMsg(`Executed: ${c.name}`);
+      await refresh();
     }
     catch (e) { toastMsg("Failed: " + String(e), true); }
   }
   async function handleRunGroup(g: string) {
-    try { await executeGroup(g); toastMsg(`Running group: ${g || "default"}`); }
+    try { await executeGroup(g); toastMsg(`Running group: ${g || "default"}`); await refresh(); }
     catch (e) { toastMsg("Group run failed: " + String(e), true); }
   }
   async function handleDelete() {
@@ -228,6 +326,7 @@ export default function App() {
                         <div className="cmd-card-header">
                           <span className={`auto-start-dot${c.auto_start ? " active" : ""}`} title={c.auto_start ? "Auto-start enabled" : "Auto-start disabled"} />
                           <span className="cmd-card-name" title={c.name}>{c.name}</span>
+                          {c.steps.length > 1 && <span className="cmd-step-count">{c.steps.length} steps</span>}
                           <div className="cmd-card-spacer" />
                           <div className="cmd-card-meta">
                             <span className={`terminal-badge ${terminalClass(c.terminal)}`} title={terminalLabel(t)}>
@@ -240,9 +339,43 @@ export default function App() {
                             </div>
                           </div>
                         </div>
-                        <div className="cmd-card-command" title={c.steps.length > 0 ? c.steps.map(s => s.cmd).join(" → ") : c.command}>
-                          {c.steps.length > 0 ? c.steps[0].cmd : c.command}
-                          {c.steps.length > 1 && <span className="step-badge">{c.steps.length} steps</span>}
+                        {c.note && <div className="cmd-card-note">{c.note}</div>}
+                        <div className="cmd-card-command">
+                          {c.steps.length > 0 ? (
+                            <>
+                              {c.steps.length === 1 ? (
+                                <div className="cmd-step-row">
+                                  <span className="cmd-step-cmd">{c.steps[0].cmd}</span>
+                                  {c.steps[0].note && <span className="cmd-step-note">{c.steps[0].note}</span>}
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="cmd-step-row">
+                                    <span className="cmd-step-cmd">{c.steps[0].cmd}</span>
+                                    {c.steps[0].note && <span className="cmd-step-note">{c.steps[0].note}</span>}
+                                  </div>
+                                  {expandedCards.has(c.id) && (
+                                    <div className="cmd-steps-expanded">
+                                      {c.steps.slice(1).map((step, i) => (
+                                        <div key={i} className="cmd-step-row">
+                                          <span className="cmd-step-cmd">{step.cmd}</span>
+                                          {step.note && <span className="cmd-step-note">{step.note}</span>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  <button className="cmd-steps-toggle" onClick={(e) => { e.stopPropagation(); toggleExpand(c.id); }}>
+                                    {expandedCards.has(c.id) ? `Collapse ↑` : `Expand ↓`}
+                                  </button>
+                                </>
+                              )}
+                            </>
+                          ) : (
+                            <span className="cmd-step-cmd">{c.command}</span>
+                          )}
+                        </div>
+                        <div className="cmd-card-footer">
+                          <span className="cmd-card-time">{c.last_executed_at ? `Last run: ${fmtDate(c.last_executed_at)}` : "Never"}</span>
                         </div>
                       </div>
                     );
@@ -321,55 +454,22 @@ export default function App() {
         <div className="modal-body">
           <div className="form-group"><label className="form-label" htmlFor="f-name">Name</label><input id="f-name" className="form-input" placeholder="e.g. Start dev" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} autoFocus /></div>
           <div className="form-group">
+            <label className="form-label" htmlFor="f-note">Note</label>
+            <input id="f-note" className="form-input" placeholder="Optional…" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} />
+          </div>
+          <div className="form-group">
             <label className="form-label">Steps</label>
             <div className="steps-editor">
-              {form.steps.map((step, i) => (
-                <div key={i} className="step-row">
-                  <span className="step-number">{i + 1}</span>
-                  <input
-                    className="form-input step-cmd-input"
-                    placeholder="Command..."
-                    value={step.cmd}
-                    onChange={e => {
-                      const s = [...form.steps];
-                      s[i] = { ...s[i], cmd: e.target.value };
-                      setForm(f => ({ ...f, steps: s }));
-                    }}
-                  />
-                  <input
-                    type="number"
-                    className="form-input step-delay-input"
-                    min={0}
-                    max={300}
-                    placeholder="Delay"
-                    title="Delay in seconds after this step"
-                    value={step.delay_sec || ""}
-                    onChange={e => {
-                      const s = [...form.steps];
-                      s[i] = { ...s[i], delay_sec: Number(e.target.value) || 0 };
-                      setForm(f => ({ ...f, steps: s }));
-                    }}
-                  />
-                  <button className="step-btn" title="Move up" disabled={i === 0} onClick={() => {
-                    if (i === 0) return;
-                    const s = [...form.steps];
-                    [s[i - 1], s[i]] = [s[i], s[i - 1]];
-                    setForm(f => ({ ...f, steps: s }));
-                  }}>↑</button>
-                  <button className="step-btn" title="Move down" disabled={i === form.steps.length - 1} onClick={() => {
-                    if (i === form.steps.length - 1) return;
-                    const s = [...form.steps];
-                    [s[i], s[i + 1]] = [s[i + 1], s[i]];
-                    setForm(f => ({ ...f, steps: s }));
-                  }}>↓</button>
-                  <button className="step-btn step-btn-remove" title="Remove" disabled={form.steps.length <= 1} onClick={() => {
-                    const s = form.steps.filter((_, j) => j !== i);
-                    setForm(f => ({ ...f, steps: s.length > 0 ? s : [{ cmd: "", delay_sec: 0 }] }));
-                  }}>✕</button>
-                </div>
-              ))}
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                <SortableContext items={stepIds} strategy={verticalListSortingStrategy}>
+                  {form.steps.map((step, i) => (
+                    <SortableStep key={stepIds[i]} id={stepIds[i]} index={i} step={step} form={form} setForm={setForm} setStepIds={setStepIds} />
+                  ))}
+                </SortableContext>
+              </DndContext>
               <button className="step-add-btn" onClick={() => {
-                setForm(f => ({ ...f, steps: [...f.steps, { cmd: "", delay_sec: 0 }] }));
+                setForm(f => ({ ...f, steps: [...f.steps, { cmd: "", delay_sec: 0, note: "" }] }));
+                setStepIds(ids => [...ids, crypto.randomUUID()]);
               }}>+ Add Step</button>
             </div>
           </div>
@@ -378,6 +478,15 @@ export default function App() {
                 <GroupSelect value={form.group_name} groups={existingGroups} onChange={v => setForm(f => ({ ...f, group_name: v }))} />
               </div>
           <div className="form-checkbox-group"><input id="f-auto" className="form-checkbox" type="checkbox" checked={form.auto_start} onChange={e => setForm(f => ({ ...f, auto_start: e.target.checked }))} /><label className="form-checkbox-label" htmlFor="f-auto">Run at startup</label></div>
+          {editingId && (() => {
+            const editingCmd = commands.find(c => c.id === editingId);
+            return editingCmd ? (
+              <div className="form-meta">
+                <span>Created: {fmtDate(editingCmd.created_at)}</span>
+                <span>Updated: {fmtDate(editingCmd.updated_at)}</span>
+              </div>
+            ) : null;
+          })()}
           <div className="form-actions"><button className="btn-cancel" onClick={closeForm}>Cancel</button><button className="btn-save" onClick={handleSave}>{editingId ? "Save" : "Add"}</button></div>
         </div>
       </div></div>)}

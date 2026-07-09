@@ -33,6 +33,7 @@ pub fn add_command(
     auto_start: bool,
     group_name: String,
     steps: Vec<CommandStep>,
+    note: String,
 ) -> Result<Command, String> {
     let now = Utc::now().to_rfc3339();
     let cmd = Command {
@@ -45,6 +46,8 @@ pub fn add_command(
         steps,
         created_at: now.clone(),
         updated_at: now,
+        note,
+        last_executed_at: String::new(),
     };
     storage.add_command(&cmd)?;
     Ok(cmd)
@@ -61,6 +64,7 @@ pub fn update_command(
     auto_start: bool,
     group_name: String,
     steps: Vec<CommandStep>,
+    note: String,
 ) -> Result<(), String> {
     let mut existing = storage.get_command(&id)?;
     existing.name = name;
@@ -69,6 +73,7 @@ pub fn update_command(
     existing.auto_start = auto_start;
     existing.group_name = group_name;
     existing.steps = steps;
+    existing.note = note;
     storage.update_command(&existing)
 }
 
@@ -76,6 +81,12 @@ pub fn update_command(
 #[tauri::command]
 pub fn delete_command(storage: State<'_, Storage>, id: String) -> Result<(), String> {
     storage.delete_command(&id)
+}
+
+/// Mark a command as executed (updates last_executed_at timestamp).
+#[tauri::command]
+pub fn mark_command_executed(storage: State<'_, Storage>, id: String) -> Result<(), String> {
+    storage.update_last_executed(&id)
 }
 
 /// Execute a command in the specified terminal.
@@ -112,7 +123,9 @@ pub fn execute_command_by_id(
         return Err("No steps defined".into());
     }
     let use_existing = use_existing_window.unwrap_or(false);
-    script::spawn_terminal_ex(&chained, &cmd.terminal, use_existing, group_name.as_deref())
+    script::spawn_terminal_ex(&chained, &cmd.terminal, use_existing, group_name.as_deref())?;
+    let _ = storage.update_last_executed(&id);
+    Ok(())
 }
 
 /// Execute all commands in a group. If all are WT profiles → tabs in one window.
@@ -122,6 +135,8 @@ pub fn execute_group(storage: State<'_, Storage>, group_name: String) -> Result<
     if cmds.is_empty() {
         return Ok(());
     }
+    // Collect IDs for execution tracking
+    let cmd_ids: Vec<String> = cmds.iter().map(|c| c.id.clone()).collect();
     // Resolve multi-step commands into chained scripts
     let resolved: Vec<(String, String)> = cmds
         .iter()
@@ -136,12 +151,18 @@ pub fn execute_group(storage: State<'_, Storage>, group_name: String) -> Result<
     // Check if all commands use Windows Terminal (terminal / terminal:*)
     let all_wt = cmds.iter().all(|c| c.terminal.starts_with("terminal"));
     if all_wt {
-        script::spawn_terminal_batch(&resolved, &group_name)
+        script::spawn_terminal_batch(&resolved, &group_name)?;
+        for id in &cmd_ids {
+            let _ = storage.update_last_executed(id);
+        }
+        Ok(())
     } else {
         // Mixed terminals → spawn individually (logged by spawn_terminal_ex)
         logger::log_spawn("group", &format!("batch {}: {} commands", group_name, resolved.len()), true, None);
-        for (cmd, terminal) in &resolved {
-            let _ = script::spawn_terminal(cmd, terminal);
+        for (i, (cmd, terminal)) in resolved.iter().enumerate() {
+            if script::spawn_terminal(cmd, terminal).is_ok() {
+                let _ = storage.update_last_executed(&cmd_ids[i]);
+            }
         }
         Ok(())
     }

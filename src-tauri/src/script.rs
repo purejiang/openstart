@@ -79,6 +79,7 @@ pub fn steps_for_command(cmd: &Command) -> Vec<CommandStep> {
         vec![CommandStep {
             cmd: cmd.command.clone(),
             delay_sec: 0,
+            note: String::new(),
         }]
     } else {
         cmd.steps.clone()
@@ -308,9 +309,9 @@ mod tests {
     #[test]
     fn build_chained_script_powershell_with_delays() {
         let steps = vec![
-            CommandStep { cmd: "echo a".into(), delay_sec: 2 },
-            CommandStep { cmd: "echo b".into(), delay_sec: 3 },
-            CommandStep { cmd: "echo c".into(), delay_sec: 0 },
+            CommandStep { cmd: "echo a".into(), delay_sec: 2, note: String::new() },
+            CommandStep { cmd: "echo b".into(), delay_sec: 3, note: String::new() },
+            CommandStep { cmd: "echo c".into(), delay_sec: 0, note: String::new() },
         ];
         let script = build_chained_script(&steps, "powershell");
         assert!(script.contains("Start-Sleep -Seconds 2"), "powershell: should have delay after step 0, got: {script}");
@@ -322,8 +323,8 @@ mod tests {
     #[test]
     fn build_chained_script_cmd_with_delays() {
         let steps = vec![
-            CommandStep { cmd: "dir".into(), delay_sec: 1 },
-            CommandStep { cmd: "echo done".into(), delay_sec: 5 },
+            CommandStep { cmd: "dir".into(), delay_sec: 1, note: String::new() },
+            CommandStep { cmd: "echo done".into(), delay_sec: 5, note: String::new() },
         ];
         let script = build_chained_script(&steps, "cmd");
         assert!(script.contains("timeout /t 1 /nobreak"), "cmd: should have delay after step 0, got: {script}");
@@ -333,7 +334,7 @@ mod tests {
     #[test]
     fn build_chained_script_gitbash_single_no_delay() {
         let steps = vec![
-            CommandStep { cmd: "ls -la".into(), delay_sec: 0 },
+            CommandStep { cmd: "ls -la".into(), delay_sec: 0, note: String::new() },
         ];
         let script = build_chained_script(&steps, "gitbash");
         assert_eq!(script, "ls -la", "gitbash single step no delay should be just the command");
@@ -342,8 +343,8 @@ mod tests {
     #[test]
     fn build_chained_script_gitbash_two_steps_no_delay() {
         let steps = vec![
-            CommandStep { cmd: "echo a".into(), delay_sec: 0 },
-            CommandStep { cmd: "echo b".into(), delay_sec: 0 },
+            CommandStep { cmd: "echo a".into(), delay_sec: 0, note: String::new() },
+            CommandStep { cmd: "echo b".into(), delay_sec: 0, note: String::new() },
         ];
         let script = build_chained_script(&steps, "gitbash");
         assert_eq!(script, "echo a && echo b", "gitbash two steps no delay should use && between");
@@ -359,9 +360,9 @@ mod tests {
     #[test]
     fn build_chained_script_gitbash_with_delays() {
         let steps = vec![
-            CommandStep { cmd: "echo x".into(), delay_sec: 1 },
-            CommandStep { cmd: "echo y".into(), delay_sec: 2 },
-            CommandStep { cmd: "echo z".into(), delay_sec: 0 },
+            CommandStep { cmd: "echo x".into(), delay_sec: 1, note: String::new() },
+            CommandStep { cmd: "echo y".into(), delay_sec: 2, note: String::new() },
+            CommandStep { cmd: "echo z".into(), delay_sec: 0, note: String::new() },
         ];
         let script = build_chained_script(&steps, "gitbash");
         assert!(script.contains(" && sleep 1 && "), "gitbash: expected ' && sleep 1 && ', got: {script}");

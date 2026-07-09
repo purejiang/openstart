@@ -75,6 +75,7 @@ pub fn run() {
             let storage = app.state::<Storage>();
             if let Ok(auto_cmds) = storage.get_auto_start_commands() {
                 if !auto_cmds.is_empty() {
+                    let cmd_ids: Vec<String> = auto_cmds.iter().map(|c| c.id.clone()).collect();
                     let cmds: Vec<(String, String)> = auto_cmds
                         .iter()
                         .map(|c| {
@@ -85,9 +86,14 @@ pub fn run() {
                             (effective_cmd, c.terminal.clone())
                         })
                         .collect();
+                    let handle = app.handle().clone();
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(startup_delay));
-                        let _ = script::spawn_terminal_batch(&cmds, "");
+                        if script::spawn_terminal_batch(&cmds, "").is_ok() {
+                            for id in &cmd_ids {
+                                let _ = handle.state::<Storage>().update_last_executed(id);
+                            }
+                        }
                     });
                 }
             }
@@ -107,6 +113,7 @@ pub fn run() {
             commands::add_command,
             commands::update_command,
             commands::delete_command,
+            commands::mark_command_executed,
             commands::execute_command,
             commands::execute_command_by_id,
             commands::execute_group,

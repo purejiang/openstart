@@ -16,8 +16,9 @@ export function addCommand(
   autoStart: boolean,
   groupName: string,
   steps: CommandStep[],
+  note: string = "",
 ): Promise<Command> {
-  return invoke("add_command", { name, command, terminal, autoStart, groupName, steps });
+  return invoke("add_command", { name, command, terminal, autoStart, groupName, steps, note });
 }
 
 export function updateCommand(
@@ -28,8 +29,9 @@ export function updateCommand(
   autoStart: boolean,
   groupName: string,
   steps: CommandStep[],
+  note: string = "",
 ): Promise<void> {
-  return invoke("update_command", { id, name, command, terminal, autoStart, groupName, steps });
+  return invoke("update_command", { id, name, command, terminal, autoStart, groupName, steps, note });
 }
 
 export function executeCommandById(id: string, useExistingWindow?: boolean, groupName?: string): Promise<void> {
@@ -91,4 +93,8 @@ export function checkUpdate(): Promise<UpdateInfo> {
 
 export function readLogs(maxLines?: number): Promise<string> {
   return invoke("read_logs", { maxLines: maxLines ?? null });
+}
+
+export function markCommandExecuted(id: string): Promise<void> {
+  return invoke("mark_command_executed", { id });
 }
