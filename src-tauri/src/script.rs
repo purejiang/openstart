@@ -140,13 +140,9 @@ fn shell_invocation(shell: &str, command: &str, keep: bool, wt: bool) -> (String
         }
         "wsl" => {
             // Run through wsl.exe so Windows CWD is mapped to /mnt/... in WSL.
-            // bash inside WSL then executes the chained command.
-            let cmd = if keep {
-                format!("{}; exec bash", command)
-            } else {
-                command.to_string()
-            };
-            ("wsl.exe".into(), vec!["--".into(), "bash".into(), "-c".into(), cmd])
+            // Window close behavior is controlled by WT profile settings (closeOnExit),
+            // so we ignore the keep flag — `; exec bash` breaks wsl.exe arg parsing.
+            ("wsl.exe".into(), vec!["--".into(), "bash".into(), "-c".into(), command.to_string()])
         }
         // powershell (default for unknown profiles)
         _ => {
