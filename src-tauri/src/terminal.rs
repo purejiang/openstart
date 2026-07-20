@@ -83,7 +83,7 @@ pub fn read_wt_profiles() -> Vec<WtProfile> {
 }
 
 /// Infer shell type from a WT profile's commandline/name.
-/// Returns "powershell", "cmd", or "gitbash".
+/// Returns "powershell", "cmd", "gitbash", or "wsl".
 pub fn profile_shell_type(profile: &WtProfile) -> &'static str {
     let cmd = profile.commandline.as_deref().unwrap_or("");
     let cmd_lower = cmd.to_lowercase();
@@ -93,10 +93,15 @@ pub fn profile_shell_type(profile: &WtProfile) -> &'static str {
         || name_lower.contains("powershell") || name_lower.contains("pwsh")
     {
         "powershell"
+    } else if name_lower.contains("ubuntu") || name_lower.contains("debian")
+        || name_lower.contains("wsl")
+    {
+        // WSL profiles must run through wsl.exe so Windows → WSL directory
+        // mapping (CWD → /mnt/...) is preserved. Running bash directly inside
+        // WSL starts in the WSL home dir and breaks relative paths.
+        "wsl"
     } else if cmd_lower.contains("bash") || cmd_lower.contains("git")
         || name_lower.contains("bash") || name_lower.contains("git bash")
-        || name_lower.contains("ubuntu") || name_lower.contains("debian")
-        || name_lower.contains("wsl")
     {
         "gitbash"
     } else if cmd_lower.contains("cmd.exe")

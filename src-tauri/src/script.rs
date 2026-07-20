@@ -15,6 +15,7 @@ pub fn shell_of(terminal: &str) -> &str {
         "powershell" => "powershell",
         "cmd" => "cmd",
         "gitbash" => "gitbash",
+        "wsl" => "wsl",
         t if t.starts_with("terminal") => {
             let profile_name = if let Some((_, p)) = t.split_once(':') { p } else { "" };
             if profile_name.is_empty() {
@@ -137,6 +138,16 @@ fn shell_invocation(shell: &str, command: &str, keep: bool, wt: bool) -> (String
             };
             (bash, vec!["-c".into(), cmd])
         }
+        "wsl" => {
+            // Run through wsl.exe so Windows CWD is mapped to /mnt/... in WSL.
+            // bash inside WSL then executes the chained command.
+            let cmd = if keep {
+                format!("{}; exec bash", command)
+            } else {
+                command.to_string()
+            };
+            ("wsl.exe".into(), vec!["--".into(), "bash".into(), "-c".into(), cmd])
+        }
         // powershell (default for unknown profiles)
         _ => {
             let mut args: Vec<String> = Vec::new();
@@ -166,7 +177,7 @@ fn build_terminal_args(
     let keep = settings::is_keep_open();
 
     match terminal {
-        "powershell" | "cmd" | "gitbash" => {
+        "powershell" | "cmd" | "gitbash" | "wsl" => {
             let wt = matches!(mode, SpawnMode::WtTab);
             let (program, inner) = shell_invocation(terminal, command, keep, wt);
             match mode {
@@ -375,6 +386,22 @@ mod tests {
         assert_eq!(shell_of("powershell"), "powershell");
         assert_eq!(shell_of("cmd"), "cmd");
         assert_eq!(shell_of("gitbash"), "gitbash");
+    }
+
+    #[test]
+    fn shell_of_wsl() {
+        assert_eq!(shell_of("wsl"), "wsl");
+    }
+
+    #[test]
+    fn build_chained_script_wsl_with_delays() {
+        let steps = vec![
+            CommandStep { cmd: "echo x".into(), delay_sec: 1, note: String::new() },
+            CommandStep { cmd: "echo y".into(), delay_sec: 2, note: String::new() },
+        ];
+        let script = build_chained_script(&steps, "wsl");
+        assert!(script.contains(" && sleep 1 && "), "wsl: expected ' && sleep 1 && ', got: {script}");
+        assert!(!script.contains("sleep 2"), "wsl: last step delay should be absent, got: {script}");
     }
 
     #[test]
