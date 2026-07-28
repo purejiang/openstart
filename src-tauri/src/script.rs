@@ -148,7 +148,7 @@ fn shell_invocation(shell: &str, command: &str, keep: bool, wt: bool) -> (String
             } else {
                 command.to_string()
             };
-            ("wsl.exe".into(), vec!["--".into(), "bash".into(), "-c".into(), cmd])
+            ("wsl.exe".into(), vec!["--".into(), "bash".into(), "-lic".into(), cmd])
         }
         // powershell (default for unknown profiles)
         _ => {
@@ -415,5 +415,28 @@ mod tests {
     fn shell_of_terminal_profile_unknown_defaults_to_powershell() {
         // Non-existent profile → fallback to powershell
         assert_eq!(shell_of("terminal:NonExistentProfile12345"), "powershell");
+    }
+
+    #[test]
+    fn shell_invocation_wsl_uses_login_interactive_shell() {
+        // keep_open=true: command gets the "; exec bash" suffix (escaped as \; for sh)
+        let (prog, args) = shell_invocation("wsl", "opencode", true, false);
+        assert_eq!(prog, "wsl.exe", "wsl program should be wsl.exe");
+        assert_eq!(args[0], "--", "first arg should be --");
+        assert_eq!(args[1], "bash", "second arg should be bash");
+        assert_eq!(args[2], "-lic",
+            "wsl should use login+interactive shell (-lic) so ~/.profile AND ~/.bashrc both load; got args: {args:?}");
+        let cmd = &args[3];
+        assert!(cmd.contains("\\; exec bash"),
+            "keep_open=true should append escaped '; exec bash'; got cmd: {cmd}");
+        assert!(cmd.starts_with("opencode"), "cmd should start with the user command; got: {cmd}");
+
+        // keep_open=false: command passed through unchanged
+        let (prog2, args2) = shell_invocation("wsl", "echo hi", false, false);
+        assert_eq!(prog2, "wsl.exe");
+        assert_eq!(args2[2], "-lic",
+            "login+interactive flag must be present even when keep_open=false; got args: {args2:?}");
+        assert_eq!(args2[3], "echo hi",
+            "keep_open=false should pass command unchanged; got: {}", args2[4]);
     }
 }
