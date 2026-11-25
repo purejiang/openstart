@@ -2288,7 +2288,7 @@ dependencies = [
 
 [[package]]
 name = "openstart"
-version = "1.0.7"
+version = "1.0.8"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
