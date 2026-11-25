@@ -107,7 +107,8 @@ pub struct Spawned {
 /// The marker only contains `[A-Za-z0-9-]`, so it is safe inside single quotes,
 /// double quotes and `set "..."` assignments. Uses `&&` for POSIX shells so it
 /// never introduces a bare `;` that Windows Terminal could treat as an action
-/// separator.
+/// separator; PowerShell launches through WT are base64-encoded instead (see
+/// [`wt_powershell_command`]) so their `;` separator never reaches `wt.exe`.
 pub fn inject_marker(command: &str, shell: &str, marker: &str) -> String {
     match shell {
         "cmd" => format!("set \"OSRUN={}\" & {}", marker, command),
@@ -115,6 +116,56 @@ pub fn inject_marker(command: &str, shell: &str, marker: &str) -> String {
         // powershell / unknown profiles
         _ => format!("$null = '{}'; {}", marker, command),
     }
+}
+
+// ── Windows Terminal safe PowerShell payload ──────────────────────────
+
+const BASE64_TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn base64_bytes(input: &[u8]) -> String {
+    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(BASE64_TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(BASE64_TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            BASE64_TABLE[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            BASE64_TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Build the `-Command` argument for a PowerShell invocation that travels
+/// through Windows Terminal.
+///
+/// `wt.exe` splits its command line on `;` before the shell ever sees it — even
+/// inside quotes. Any `;` in the payload (marker injection, multi-step chains or
+/// a user's own PowerShell command) therefore made WT open an extra tab trying
+/// to launch the truncated fragment. The script is base64-encoded (UTF-8) and
+/// decoded via `Invoke-Expression`, so the command line only contains characters
+/// WT passes through untouched. The PID marker rides along as a trailing comment,
+/// keeping it visible to process-command-line scanning without a `;`.
+fn wt_powershell_command(script: &str, marker: Option<&str>) -> String {
+    let encoded = base64_bytes(script.as_bytes());
+    let mut argument = format!(
+        "Invoke-Expression ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{}')))",
+        encoded
+    );
+    if let Some(marker) = marker.filter(|value| !value.is_empty()) {
+        argument.push_str(" # ");
+        argument.push_str(marker);
+    }
+    argument
 }
 
 // ── Argument building ─────────────────────────────────────────────────
@@ -147,7 +198,13 @@ fn wt_tab_prefix(use_existing: bool, group: Option<&str>) -> Vec<String> {
 ///
 /// `wt` = the command runs inside `wt.exe`, which changes gitbash `;` escaping
 /// (needs `\;`) and the bash executable fallback (`bash` vs `bash.exe`).
-fn shell_invocation(shell: &str, command: &str, keep: bool, wt: bool) -> (String, Vec<String>) {
+fn shell_invocation(
+    shell: &str,
+    command: &str,
+    keep: bool,
+    wt: bool,
+    marker: Option<&str>,
+) -> (String, Vec<String>) {
     match shell {
         "cmd" => (
             "cmd.exe".into(),
@@ -197,7 +254,12 @@ fn shell_invocation(shell: &str, command: &str, keep: bool, wt: bool) -> (String
                 args.push("-NoExit".into());
             }
             args.push("-Command".into());
-            args.push(format!("& {{{}}}", command));
+            if wt {
+                // Never let a `;` reach wt.exe — encode the whole script instead.
+                args.push(wt_powershell_command(&format!("& {{{}}}", command), marker));
+            } else {
+                args.push(format!("& {{{}}}", command));
+            }
             ("powershell.exe".into(), args)
         }
     }
@@ -226,7 +288,7 @@ fn build_terminal_args(
                 Some(marker) if !marker.is_empty() => inject_marker(command, terminal, marker),
                 _ => command.to_string(),
             };
-            let (program, inner) = shell_invocation(terminal, &effective, keep, wt);
+            let (program, inner) = shell_invocation(terminal, &effective, keep, wt, marker);
             match mode {
                 SpawnMode::Standalone => Ok((program, inner)),
                 SpawnMode::WtTab => {
@@ -256,7 +318,7 @@ fn build_terminal_args(
                 _ => command.to_string(),
             };
             // Everything under `terminal*` runs inside wt.exe.
-            let (shell_program, shell_args) = shell_invocation(shell, &effective, keep, true);
+            let (shell_program, shell_args) = shell_invocation(shell, &effective, keep, true, marker);
 
             match mode {
                 SpawnMode::Standalone => {
@@ -658,7 +720,7 @@ mod tests {
     #[test]
     fn shell_invocation_wsl_uses_login_interactive_shell() {
         // keep_open=true: command gets the "; exec bash" suffix (escaped as \; for sh)
-        let (prog, args) = shell_invocation("wsl", "opencode", true, false);
+        let (prog, args) = shell_invocation("wsl", "opencode", true, false, None);
         assert_eq!(prog, "wsl.exe", "wsl program should be wsl.exe");
         assert_eq!(args[0], "--", "first arg should be --");
         assert_eq!(args[1], "bash", "second arg should be bash");
@@ -675,7 +737,7 @@ mod tests {
         );
 
         // keep_open=false: command passed through unchanged
-        let (prog2, args2) = shell_invocation("wsl", "echo hi", false, false);
+        let (prog2, args2) = shell_invocation("wsl", "echo hi", false, false, None);
         assert_eq!(prog2, "wsl.exe");
         assert_eq!(
             args2[2], "-lic",
@@ -716,19 +778,100 @@ mod tests {
         let joined = args.join(" ");
         assert!(
             joined.contains(marker),
-            "WT tab args should contain the injected marker, got: {joined}"
+            "WT tab args should keep the marker visible for PID discovery, got: {joined}"
         );
         assert!(
-            joined.contains("echo hi"),
-            "WT tab args should contain the command"
+            joined.contains("FromBase64String"),
+            "WT PowerShell payload must be base64-encoded, got: {joined}"
         );
+        assert!(
+            !joined.contains("echo hi"),
+            "the raw command must not leak into the WT command line, got: {joined}"
+        );
+    }
+
+    #[test]
+    fn base64_encoder_matches_reference_values() {
+        assert_eq!(base64_bytes(b""), "");
+        assert_eq!(base64_bytes(b"f"), "Zg==");
+        assert_eq!(base64_bytes(b"fo"), "Zm8=");
+        assert_eq!(base64_bytes(b"foo"), "Zm9v");
+        assert_eq!(base64_bytes(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_bytes("& {echo hi}".as_bytes()), "JiB7ZWNobyBoaX0=");
+        assert_eq!(base64_bytes("中文".as_bytes()), "5Lit5paH");
+    }
+
+    #[test]
+    fn wt_powershell_payload_has_no_wt_separator() {
+        let marker = "OSRUN-abc123def456";
+        let argument = wt_powershell_command("& {echo hi}", Some(marker));
+        assert!(
+            !argument.contains(';'),
+            "payload must not contain ';' because wt.exe would split it: {argument}"
+        );
+        assert!(
+            argument.contains("JiB7ZWNobyBoaX0="),
+            "payload should be the base64 of '& {{echo hi}}', got: {argument}"
+        );
+        assert!(
+            argument.ends_with(&format!("# {marker}")),
+            "marker should ride along as a trailing comment, got: {argument}"
+        );
+    }
+
+    #[test]
+    fn wt_powershell_args_never_expose_semicolons() {
+        let marker = "OSRUN-feedface0001";
+        let steps = vec![
+            CommandStep {
+                cmd: "echo a".into(),
+                delay_sec: 2,
+                note: String::new(),
+            },
+            CommandStep {
+                cmd: "echo b".into(),
+                delay_sec: 0,
+                note: String::new(),
+            },
+        ];
+        let chained = build_chained_script(&steps, "powershell");
+        assert!(
+            chained.contains(';'),
+            "powershell chains legitimately use ';' before encoding: {chained}"
+        );
+
+        let args = build_wt_tab_args_tracked(&chained, "terminal:PowerShell", Some(marker)).unwrap();
+        assert!(
+            args.iter().all(|arg| !arg.contains(';')),
+            "no argument passed to wt.exe may contain ';': {args:?}"
+        );
+        assert!(
+            args.iter().any(|arg| arg.contains(marker)),
+            "WT args should keep the marker for PID discovery: {args:?}"
+        );
+
+        // Same for a standalone launch into an existing WT window (`-w 0`).
+        let (program, standalone) =
+            build_spawn_args_tracked("echo hi; echo bye", "terminal:PowerShell", true, None, Some(marker))
+                .unwrap();
+        assert_eq!(program, "wt.exe");
+        assert!(
+            standalone.iter().all(|arg| !arg.contains(';')),
+            "standalone WT launch args may not contain ';': {standalone:?}"
+        );
+    }
+
+    #[test]
+    fn standalone_powershell_keeps_plain_command_wrapper() {
+        let (_program, args) = shell_invocation("powershell", "echo hi", true, false, None);
+        assert_eq!(args, vec!["-NoExit", "-Command", "& {echo hi}"]);
     }
 
     #[test]
     fn shell_invocation_gitbash_wt_keep_uses_child_bash() {
         // WT keep-open must keep the outer bash alive (it carries the marker),
         // so use a child `bash` rather than `exec bash`.
-        let (prog, args) = shell_invocation("gitbash", "echo hi", true, true);
+        let (prog, args) = shell_invocation("gitbash", "echo hi", true, true, None);
         assert!(
             prog.to_lowercase().contains("bash"),
             "expected a bash program, got {prog}"
@@ -744,7 +887,7 @@ mod tests {
         );
 
         // Standalone gitbash launches keep the existing `exec bash` behavior.
-        let (_prog, direct) = shell_invocation("gitbash", "echo hi", true, false);
+        let (_prog, direct) = shell_invocation("gitbash", "echo hi", true, false, None);
         assert!(
             direct[1].contains("; exec bash"),
             "standalone gitbash should keep 'exec bash', got: {}",

@@ -11,7 +11,7 @@ npm run tauri:dev     # 启动开发（Vite + Rust 编译 + GUI 窗口，长时�
 npm run tauri:build   # 生产打包 → NSIS 安装器
 npm run build         # 仅前端构建（tsc + vite）
 npm run lint          # oxlint
-cd src-tauri && cargo test    # Rust 单元测试（32 个）
+cd src-tauri && cargo test    # Rust 单元测试（36 个）
 cd src-tauri && cargo check   # Rust 类型检查
 ```
 
@@ -105,6 +105,14 @@ enable | disable | help
 - `powershell` / `cmd` / `gitbash` — 独立启动（不经过 wt.exe）
 - `terminal` — Windows Terminal 默认 profile（PowerShell）
 - `terminal:ProfileName` — WT 指定 profile（名称从 settings.json 动态读取）
+
+### Windows Terminal 命令传输（重要）
+
+- `wt.exe` 会把命令行里的 `;` 当作多命令分隔符，**即使 `;` 在引号内**也会拆成多个标签页（v1.0.8 的“dsh web 打开两个终端”就是 marker 注入引入的 `;` 被 WT 拆开）。
+- 所以通过 WT 启动 PowerShell 时，整个脚本按 UTF-8 base64 编码，用 `-Command "Invoke-Expression (...FromBase64String('...'))"` 执行；PID marker 以 `# OSRUN-...` 注释形式留在命令行里供进程扫描。见 `script.rs::wt_powershell_command`。
+- 直接启动的 `powershell`（`terminal=powershell`）不经过 WT，仍用 `-Command "& { ... }"`，不需要编码。
+- `cmd` / `gitbash` / `wsl` 的 marker 分别用 `&` / `&&` / `\;`；不要在 WT 命令行里引入裸 `;`。
+- 新增 WT 相关参数构造时，先补 `script.rs` 的单测断言“任何传给 wt.exe 的参数都不含 `;`”。
 
 
 ## 发布
