@@ -9,8 +9,8 @@ export default defineConfig({
   clearScreen: false,
 
   server: {
-    // Tauri expects a fixed port; fail if not available
-    port: 5173,
+    // pdao's dev server uses 5173; keep OpenStart on 5174 so both can run.
+    port: 5174,
     strictPort: true,
     // Allow Tauri to connect from its own host
     host: process.env.TAURI_DEV_HOST || "localhost",

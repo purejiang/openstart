@@ -1,12 +1,12 @@
-use crate::storage::{Command, CommandStep, Storage};
-use crate::terminal;
 use crate::autostart;
-use crate::script;
-use crate::settings::{self, AppSettings};
 use crate::logger;
+use crate::runner::{self, LaunchOptions, RunError};
+use crate::settings::{self, AppSettings};
+use crate::storage::{Command, CommandStep, Run, Storage};
+use crate::terminal;
+use chrono::Utc;
 use tauri::State;
 use uuid::Uuid;
-use chrono::Utc;
 
 /// Wrapper for app data directory path, managed as Tauri state.
 pub struct AppDataDir(pub std::path::PathBuf);
@@ -42,6 +42,7 @@ pub fn add_command(
         command,
         terminal,
         auto_start,
+        enabled: true,
         group_name,
         steps,
         created_at: now.clone(),
@@ -77,6 +78,17 @@ pub fn update_command(
     storage.update_command(&existing)
 }
 
+/// Enable or disable a command. Disabled commands are shown in the GUI but
+/// cannot be launched individually, by group, or by auto-start.
+#[tauri::command]
+pub fn set_command_enabled(
+    storage: State<'_, Storage>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    storage.set_command_enabled(&id, enabled)
+}
+
 /// Delete a command by id.
 #[tauri::command]
 pub fn delete_command(storage: State<'_, Storage>, id: String) -> Result<(), String> {
@@ -99,12 +111,13 @@ pub fn mark_command_executed(storage: State<'_, Storage>, id: String) -> Result<
 /// - `terminal:<name>`     — WT with named profile (dynamic from settings.json)
 #[tauri::command]
 pub fn execute_command(
+    storage: State<'_, Storage>,
     name: String,
     command: String,
     terminal: String,
-) -> Result<(), String> {
-    script::spawn_terminal(&command, &terminal)
-        .map_err(|e| format!("Failed to execute '{}' in {} terminal: {}", name, terminal, e))
+) -> Result<Run, RunError> {
+    let options = LaunchOptions::gui(false, None);
+    runner::launch_adhoc(storage.inner(), &name, &command, &terminal, &options)
 }
 
 /// Execute a command by its ID, resolving multi-step chains.
@@ -114,58 +127,22 @@ pub fn execute_command_by_id(
     id: String,
     use_existing_window: Option<bool>,
     group_name: Option<String>,
-) -> Result<(), String> {
-    let cmd = storage.get_command(&id)?;
-    let steps = script::steps_for_command(&cmd);
-    let shell = script::shell_of(&cmd.terminal);
-    let chained = script::build_chained_script(&steps, shell);
-    if chained.is_empty() {
-        return Err("No steps defined".into());
-    }
-    let use_existing = use_existing_window.unwrap_or(false);
-    script::spawn_terminal_ex(&chained, &cmd.terminal, use_existing, group_name.as_deref())?;
-    let _ = storage.update_last_executed(&id);
-    Ok(())
+) -> Result<Run, RunError> {
+    let cmd = storage.get_command(&id).map_err(RunError::internal)?;
+    let options = LaunchOptions::gui(use_existing_window.unwrap_or(false), group_name);
+    runner::launch_command(storage.inner(), &cmd, &options)
 }
 
 /// Execute all commands in a group. If all are WT profiles → tabs in one window.
+/// The whole group is rejected when any member is already running.
 #[tauri::command]
-pub fn execute_group(storage: State<'_, Storage>, group_name: String) -> Result<(), String> {
-    let cmds = storage.get_group_commands(&group_name)?;
-    if cmds.is_empty() {
-        return Ok(());
-    }
-    // Collect IDs for execution tracking
-    let cmd_ids: Vec<String> = cmds.iter().map(|c| c.id.clone()).collect();
-    // Resolve multi-step commands into chained scripts
-    let resolved: Vec<(String, String)> = cmds
-        .iter()
-        .map(|c| {
-            let steps = script::steps_for_command(c);
-            let shell = script::shell_of(&c.terminal);
-            let chained = script::build_chained_script(&steps, shell);
-            let effective_cmd = if chained.is_empty() { c.command.clone() } else { chained };
-            (effective_cmd, c.terminal.clone())
-        })
-        .collect();
-    // Check if all commands use Windows Terminal (terminal / terminal:*)
-    let all_wt = cmds.iter().all(|c| c.terminal.starts_with("terminal"));
-    if all_wt {
-        script::spawn_terminal_batch(&resolved, &group_name)?;
-        for id in &cmd_ids {
-            let _ = storage.update_last_executed(id);
-        }
-        Ok(())
-    } else {
-        // Mixed terminals → spawn individually (logged by spawn_terminal_ex)
-        logger::log_spawn("group", &format!("batch {}: {} commands", group_name, resolved.len()), true, None);
-        for (i, (cmd, terminal)) in resolved.iter().enumerate() {
-            if script::spawn_terminal(cmd, terminal).is_ok() {
-                let _ = storage.update_last_executed(&cmd_ids[i]);
-            }
-        }
-        Ok(())
-    }
+pub fn execute_group(
+    storage: State<'_, Storage>,
+    group_name: String,
+) -> Result<Vec<Run>, RunError> {
+    let options = LaunchOptions::gui(false, Some(group_name.clone()));
+    let outcome = runner::launch_group(storage.inner(), &group_name, &options)?;
+    Ok(outcome.runs)
 }
 
 /// Get all commands marked for auto-start.
@@ -214,7 +191,12 @@ pub fn update_settings(
     keep_terminal_open: bool,
 ) -> Result<(), String> {
     // Debug: log the received value
-    logger::log_spawn("settings", &format!("keep_terminal_open={}", keep_terminal_open), true, None);
+    logger::log_spawn(
+        "settings",
+        &format!("keep_terminal_open={}", keep_terminal_open),
+        true,
+        None,
+    );
 
     let s = AppSettings {
         app_autostart,

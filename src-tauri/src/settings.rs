@@ -1,6 +1,21 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Resolve the OpenStart data directory.
+///
+/// `OPENSTART_DATA_DIR` overrides the default `%APPDATA%\openstart` path; this
+/// is useful for portable installs, tests, and isolated CLI experiments.
+pub fn app_data_dir() -> PathBuf {
+    if let Some(custom) = std::env::var_os("OPENSTART_DATA_DIR") {
+        if !custom.is_empty() {
+            return PathBuf::from(custom);
+        }
+    }
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("openstart")
+}
 
 /// Runtime flag for whether to keep terminal windows open after command execution.
 /// Default: true. Updated when settings are loaded or changed.
@@ -68,8 +83,7 @@ pub fn save_settings(app_data_dir: &Path, settings: &AppSettings) -> Result<(), 
     let path = app_data_dir.join("openstart_settings.json");
     let content = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    std::fs::write(&path, content)
-        .map_err(|e| format!("Failed to write settings file: {}", e))?;
+    std::fs::write(&path, content).map_err(|e| format!("Failed to write settings file: {}", e))?;
     set_keep_open(settings.keep_terminal_open);
     Ok(())
 }

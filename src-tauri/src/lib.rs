@@ -1,18 +1,20 @@
+pub mod autostart;
+pub mod commands;
+pub mod logger;
+pub mod process;
+pub mod runner;
+pub mod script;
+pub mod settings;
 pub mod storage;
 pub mod terminal;
-pub mod autostart;
-pub mod settings;
-pub mod commands;
-pub mod script;
 pub mod updater;
-pub mod logger;
 
 use commands::AppDataDir;
 use storage::Storage;
-use tauri::Manager;
-use tauri::State;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
+use tauri::Manager;
+use tauri::State;
 
 #[tauri::command]
 fn check_update() -> Result<updater::UpdateInfo, String> {
@@ -26,16 +28,13 @@ fn read_logs(data_dir: State<'_, AppDataDir>, max_lines: Option<usize>) -> Resul
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app_data_dir = dirs::data_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("openstart");
+    let app_data_dir = settings::app_data_dir();
 
     std::fs::create_dir_all(&app_data_dir).expect("Failed to create app data directory");
 
     logger::init_logger(&app_data_dir);
 
-    let storage =
-        Storage::new(&app_data_dir).expect("Failed to initialize database");
+    let storage = Storage::new(&app_data_dir).expect("Failed to initialize database");
 
     // Clone before moving into AppDataDir state
     let close_data_dir = app_data_dir.clone();
@@ -71,28 +70,38 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Auto-execute startup commands as tabs in one Terminal window
+            // Auto-execute startup commands as tabs in one Terminal window.
+            // All launches go through the run registry so duplicates are skipped
+            // and the GUI can show their PID/status.
             let storage = app.state::<Storage>();
+            let _ = storage.prune_runs();
             if let Ok(auto_cmds) = storage.get_auto_start_commands() {
                 if !auto_cmds.is_empty() {
-                    let cmd_ids: Vec<String> = auto_cmds.iter().map(|c| c.id.clone()).collect();
-                    let cmds: Vec<(String, String)> = auto_cmds
-                        .iter()
-                        .map(|c| {
-                            let steps = script::steps_for_command(c);
-                            let shell = script::shell_of(&c.terminal);
-                            let chained = script::build_chained_script(&steps, shell);
-                            let effective_cmd = if chained.is_empty() { c.command.clone() } else { chained };
-                            (effective_cmd, c.terminal.clone())
-                        })
-                        .collect();
                     let handle = app.handle().clone();
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(startup_delay));
-                        if script::spawn_terminal_batch(&cmds, "").is_ok() {
-                            for id in &cmd_ids {
-                                let _ = handle.state::<Storage>().update_last_executed(id);
+                        let storage = handle.state::<Storage>();
+                        match crate::runner::launch_auto_start(
+                            storage.inner(),
+                            &auto_cmds,
+                            &crate::runner::LaunchOptions::auto_start(),
+                        ) {
+                            Ok(outcome) => {
+                                for skipped in &outcome.skipped {
+                                    logger::log_spawn(
+                                        "autostart",
+                                        &format!("skipped (already running): {}", skipped),
+                                        true,
+                                        None,
+                                    );
+                                }
                             }
+                            Err(error) => logger::log_spawn(
+                                "autostart",
+                                &format!("auto-start failed: {}", error.message),
+                                false,
+                                Some(&error.message),
+                            ),
                         }
                     });
                 }
@@ -112,6 +121,7 @@ pub fn run() {
             commands::list_commands,
             commands::add_command,
             commands::update_command,
+            commands::set_command_enabled,
             commands::delete_command,
             commands::mark_command_executed,
             commands::execute_command,
@@ -126,6 +136,10 @@ pub fn run() {
             commands::get_app_info,
             check_update,
             read_logs,
+            runner::list_runs,
+            runner::stop_run,
+            runner::stop_group_runs,
+            runner::stop_all_runs,
         ])
         .on_window_event(move |window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

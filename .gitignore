@@ -27,6 +27,14 @@ dist-ssr
 src-tauri/target/
 src-tauri/target-rel/
 
+# Local dev runtime data (portable data dir + WebView2 profile)
+.dev-data/
+.dev-webview2/
+
+# Agent / tooling scratch artifacts
+.dsh_*
+test.obj
+
 # AI assistant
 .omo/
 .codegraph/

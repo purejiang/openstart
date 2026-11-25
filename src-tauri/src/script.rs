@@ -4,9 +4,10 @@
 //! All logic here is side-effecting only through `spawn_*` functions; the
 //! `build_*` helpers are pure and unit-tested.
 
-use crate::storage::{Command, CommandStep};
-use crate::settings;
 use crate::logger;
+use crate::process;
+use crate::settings;
+use crate::storage::{Command, CommandStep};
 use std::process::Command as ProcessCommand;
 
 /// Resolve the shell type string for a given terminal identifier.
@@ -17,7 +18,11 @@ pub fn shell_of(terminal: &str) -> &str {
         "gitbash" => "gitbash",
         "wsl" => "wsl",
         t if t.starts_with("terminal") => {
-            let profile_name = if let Some((_, p)) = t.split_once(':') { p } else { "" };
+            let profile_name = if let Some((_, p)) = t.split_once(':') {
+                p
+            } else {
+                ""
+            };
             if profile_name.is_empty() {
                 "powershell"
             } else {
@@ -87,6 +92,31 @@ pub fn steps_for_command(cmd: &Command) -> Vec<CommandStep> {
     }
 }
 
+/// A spawned terminal process. `pid` is the direct child PID (standalone
+/// shells) or the short-lived `wt.exe` launcher PID (Windows Terminal — the
+/// real tab shell PID is resolved separately via marker scanning).
+#[derive(Debug, Clone)]
+pub struct Spawned {
+    pub pid: Option<u32>,
+    pub program: String,
+}
+
+/// Inject a unique marker into a command so the real shell process can later be
+/// found by scanning process command lines.
+///
+/// The marker only contains `[A-Za-z0-9-]`, so it is safe inside single quotes,
+/// double quotes and `set "..."` assignments. Uses `&&` for POSIX shells so it
+/// never introduces a bare `;` that Windows Terminal could treat as an action
+/// separator.
+pub fn inject_marker(command: &str, shell: &str, marker: &str) -> String {
+    match shell {
+        "cmd" => format!("set \"OSRUN={}\" & {}", marker, command),
+        "gitbash" | "wsl" => format!("OSRUN='{}' && {}", marker, command),
+        // powershell / unknown profiles
+        _ => format!("$null = '{}'; {}", marker, command),
+    }
+}
+
 // ── Argument building ─────────────────────────────────────────────────
 
 /// Which flavor of arguments to produce for a resolved terminal command.
@@ -128,11 +158,18 @@ fn shell_invocation(shell: &str, command: &str, keep: bool, wt: bool) -> (String
         ),
         "gitbash" => {
             let fallback = if wt { "bash" } else { "bash.exe" };
-            let bash = crate::terminal::find_bash_path()
-                .unwrap_or_else(|| fallback.to_string());
+            let bash = crate::terminal::find_bash_path().unwrap_or_else(|| fallback.to_string());
             let sep = if wt { "\\;" } else { ";" };
             let cmd = if keep {
-                format!("{}{} exec bash", command, sep)
+                // For WT launches use a child `bash` instead of `exec bash`:
+                // the outer shell keeps the marker in its command line, which
+                // lets us resolve/track its PID. The PID is unchanged by exec,
+                // but the marker would disappear from the command line.
+                if wt {
+                    format!("{}{} bash", command, sep)
+                } else {
+                    format!("{}{} exec bash", command, sep)
+                }
             } else {
                 command.to_string()
             };
@@ -148,7 +185,10 @@ fn shell_invocation(shell: &str, command: &str, keep: bool, wt: bool) -> (String
             } else {
                 command.to_string()
             };
-            ("wsl.exe".into(), vec!["--".into(), "bash".into(), "-lic".into(), cmd])
+            (
+                "wsl.exe".into(),
+                vec!["--".into(), "bash".into(), "-lic".into(), cmd],
+            )
         }
         // powershell (default for unknown profiles)
         _ => {
@@ -175,13 +215,18 @@ fn build_terminal_args(
     use_existing_window: bool,
     group_name: Option<&str>,
     mode: SpawnMode,
+    marker: Option<&str>,
 ) -> Result<(String, Vec<String>), String> {
     let keep = settings::is_keep_open();
 
     match terminal {
         "powershell" | "cmd" | "gitbash" | "wsl" => {
             let wt = matches!(mode, SpawnMode::WtTab);
-            let (program, inner) = shell_invocation(terminal, command, keep, wt);
+            let effective = match marker {
+                Some(marker) if !marker.is_empty() => inject_marker(command, terminal, marker),
+                _ => command.to_string(),
+            };
+            let (program, inner) = shell_invocation(terminal, &effective, keep, wt);
             match mode {
                 SpawnMode::Standalone => Ok((program, inner)),
                 SpawnMode::WtTab => {
@@ -192,7 +237,11 @@ fn build_terminal_args(
             }
         }
         t if t.starts_with("terminal") => {
-            let profile_name = if let Some((_, p)) = t.split_once(':') { p } else { "" };
+            let profile_name = if let Some((_, p)) = t.split_once(':') {
+                p
+            } else {
+                ""
+            };
             let shell = if profile_name.is_empty() {
                 "powershell"
             } else {
@@ -202,8 +251,12 @@ fn build_terminal_args(
                     .map(|p| crate::terminal::profile_shell_type(p))
                     .unwrap_or("powershell")
             };
+            let effective = match marker {
+                Some(marker) if !marker.is_empty() => inject_marker(command, shell, marker),
+                _ => command.to_string(),
+            };
             // Everything under `terminal*` runs inside wt.exe.
-            let (shell_program, shell_args) = shell_invocation(shell, command, keep, true);
+            let (shell_program, shell_args) = shell_invocation(shell, &effective, keep, true);
 
             match mode {
                 SpawnMode::Standalone => {
@@ -236,13 +289,41 @@ pub fn build_spawn_args(
     use_existing_window: bool,
     group_name: Option<&str>,
 ) -> Result<(String, Vec<String>), String> {
-    build_terminal_args(command, terminal, use_existing_window, group_name, SpawnMode::Standalone)
+    build_spawn_args_tracked(command, terminal, use_existing_window, group_name, None)
+}
+
+/// Same as [`build_spawn_args`] but optionally injects a PID-discovery marker
+/// (used for Windows Terminal launches).
+pub fn build_spawn_args_tracked(
+    command: &str,
+    terminal: &str,
+    use_existing_window: bool,
+    group_name: Option<&str>,
+    marker: Option<&str>,
+) -> Result<(String, Vec<String>), String> {
+    build_terminal_args(
+        command,
+        terminal,
+        use_existing_window,
+        group_name,
+        SpawnMode::Standalone,
+        marker,
+    )
 }
 
 /// Build args for a single wt.exe `new-tab` segment (no program prefix).
 pub fn build_wt_tab_args(command: &str, terminal: &str) -> Result<Vec<String>, String> {
+    build_wt_tab_args_tracked(command, terminal, None)
+}
+
+/// Same as [`build_wt_tab_args`] but optionally injects a PID-discovery marker.
+pub fn build_wt_tab_args_tracked(
+    command: &str,
+    terminal: &str,
+    marker: Option<&str>,
+) -> Result<Vec<String>, String> {
     let (_program, args) =
-        build_terminal_args(command, terminal, false, None, SpawnMode::WtTab)?;
+        build_terminal_args(command, terminal, false, None, SpawnMode::WtTab, marker)?;
     Ok(args)
 }
 
@@ -254,64 +335,132 @@ pub fn spawn_terminal(command: &str, terminal: &str) -> Result<(), String> {
 }
 
 /// Spawn with optional tab-in-existing-window for WT terminals.
-pub fn spawn_terminal_ex(command: &str, terminal: &str, use_existing_window: bool, group_name: Option<&str>) -> Result<(), String> {
-    let (program, args) = build_spawn_args(command, terminal, use_existing_window, group_name)?;
-    let cmd_preview = if command.len() > 80 { &command[..80] } else { command };
+pub fn spawn_terminal_ex(
+    command: &str,
+    terminal: &str,
+    use_existing_window: bool,
+    group_name: Option<&str>,
+) -> Result<(), String> {
+    spawn_terminal_ex_tracked(command, terminal, use_existing_window, group_name, None).map(|_| ())
+}
 
-    use std::os::windows::process::CommandExt;
-    const CREATE_NEW_CONSOLE: u32 = 0x00000010;
-
-    let mut proc = ProcessCommand::new(&program);
-    proc.args(args.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-    // GUI apps (wt.exe) don't need a console. Console apps (powershell/cmd/bash) do,
-    // since the parent OpenStart process is a GUI app with no console of its own.
-    if program != "wt.exe" {
-        proc.creation_flags(CREATE_NEW_CONSOLE);
-    }
-
-    let result = proc.spawn()
-        .map(|_| ())
-        .map_err(|e| format!("{}", e));
+/// Spawn a terminal process and return its PID.
+///
+/// `marker` is only used for Windows Terminal launches; the direct child PID of
+/// `wt.exe` is a short-lived launcher, so the real shell PID is resolved later
+/// by scanning for the marker.
+pub fn spawn_terminal_ex_tracked(
+    command: &str,
+    terminal: &str,
+    use_existing_window: bool,
+    group_name: Option<&str>,
+    marker: Option<&str>,
+) -> Result<Spawned, String> {
+    let (program, args) =
+        build_spawn_args_tracked(command, terminal, use_existing_window, group_name, marker)?;
+    let cmd_preview = if command.len() > 80 {
+        &command[..80]
+    } else {
+        command
+    };
     let keep = settings::is_keep_open();
-    match &result {
-        Ok(()) => logger::log_spawn(terminal, &format!("keep={} | {}", keep, cmd_preview), true, None),
-        Err(e) => logger::log_spawn(terminal, &format!("keep={} | {}", keep, cmd_preview), false, Some(e)),
+
+    let spawned = if program == "wt.exe" {
+        // GUI app: no console. The launcher exits immediately anyway; its PID is
+        // only informational (WT runs are tracked through their marker).
+        ProcessCommand::new(&program)
+            .args(args.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+            .spawn()
+            .map(|child| Some(child.id()))
+            .map_err(|e| format!("{}", e))
+    } else {
+        // Console apps must own a fresh console, otherwise inherited stdout
+        // handles leak the shell output into the invoking CLI console (and can
+        // keep a piped caller blocked until the terminal closes).
+        process::spawn_new_console(&program, &args).map(Some)
+    };
+
+    match spawned {
+        Ok(pid) => {
+            logger::log_spawn(
+                terminal,
+                &format!("keep={} | {}", keep, cmd_preview),
+                true,
+                None,
+            );
+            Ok(Spawned { pid, program })
+        }
+        Err(error) => {
+            logger::log_spawn(
+                terminal,
+                &format!("keep={} | {}", keep, cmd_preview),
+                false,
+                Some(&error),
+            );
+            Err(error)
+        }
     }
-    result
 }
 
 /// Spawn multiple commands as tabs in a single Windows Terminal window.
 /// If `group_name` is provided, the WT window is named `OS:<group_name>` for later targeting.
 pub fn spawn_terminal_batch(commands: &[(String, String)], group_name: &str) -> Result<(), String> {
+    let tracked: Vec<(String, String, String)> = commands
+        .iter()
+        .map(|(command, terminal)| (command.clone(), terminal.clone(), String::new()))
+        .collect();
+    spawn_terminal_batch_tracked(&tracked, group_name).map(|_| ())
+}
+
+/// Spawn multiple commands as WT tabs, injecting a marker per tab and returning
+/// the `wt.exe` launcher PID.
+pub fn spawn_terminal_batch_tracked(
+    commands: &[(String, String, String)],
+    group_name: &str,
+) -> Result<Spawned, String> {
     if commands.is_empty() {
-        return Ok(());
+        return Err("No commands to launch".to_string());
     }
     let mut all_args: Vec<String> = vec![];
     if !group_name.is_empty() {
         all_args.push("--window".into());
         all_args.push(format!("OS:{}", group_name));
     }
-    for (i, (cmd, term)) in commands.iter().enumerate() {
+    for (i, (cmd, term, marker)) in commands.iter().enumerate() {
         if i > 0 {
             all_args.push(";".into());
         }
-        all_args.append(&mut build_wt_tab_args(cmd, term)?);
+        let marker = if marker.is_empty() {
+            None
+        } else {
+            Some(marker.as_str())
+        };
+        all_args.append(&mut build_wt_tab_args_tracked(cmd, term, marker)?);
     }
     // Log the batch — use first command as preview
-    let preview = if let Some((cmd, term)) = commands.first() {
-        let p = if cmd.len() > 80 { &cmd[..80] } else { cmd.as_str() };
+    let preview = {
+        let (cmd, term, _) = &commands[0];
+        let p = if cmd.len() > 80 {
+            &cmd[..80]
+        } else {
+            cmd.as_str()
+        };
         (term.clone(), p.to_string())
-    } else {
-        return Ok(());
     };
-    let result = ProcessCommand::new("wt.exe").args(&all_args).spawn()
-        .map(|_| ())
-        .map_err(|e| format!("{}", e));
-    match &result {
-        Ok(()) => logger::log_spawn(&preview.0, &preview.1, true, None),
-        Err(ref e) => logger::log_spawn(&preview.0, &preview.1, false, Some(e)),
+    let result = ProcessCommand::new("wt.exe").args(&all_args).spawn();
+    match result {
+        Ok(child) => {
+            logger::log_spawn(&preview.0, &preview.1, true, None);
+            Ok(Spawned {
+                pid: Some(child.id()),
+                program: "wt.exe".to_string(),
+            })
+        }
+        Err(e) => {
+            logger::log_spawn(&preview.0, &preview.1, false, Some(&e.to_string()));
+            Err(format!("{}", e))
+        }
     }
-    result
 }
 
 #[cfg(test)]
@@ -322,45 +471,99 @@ mod tests {
     #[test]
     fn build_chained_script_powershell_with_delays() {
         let steps = vec![
-            CommandStep { cmd: "echo a".into(), delay_sec: 2, note: String::new() },
-            CommandStep { cmd: "echo b".into(), delay_sec: 3, note: String::new() },
-            CommandStep { cmd: "echo c".into(), delay_sec: 0, note: String::new() },
+            CommandStep {
+                cmd: "echo a".into(),
+                delay_sec: 2,
+                note: String::new(),
+            },
+            CommandStep {
+                cmd: "echo b".into(),
+                delay_sec: 3,
+                note: String::new(),
+            },
+            CommandStep {
+                cmd: "echo c".into(),
+                delay_sec: 0,
+                note: String::new(),
+            },
         ];
         let script = build_chained_script(&steps, "powershell");
-        assert!(script.contains("Start-Sleep -Seconds 2"), "powershell: should have delay after step 0, got: {script}");
-        assert!(script.contains("Start-Sleep -Seconds 3"), "powershell: should have delay after step 1, got: {script}");
-        assert!(!script.contains("Start-Sleep -Seconds 0"), "powershell: last step delay 0 should be absent, got: {script}");
-        assert!(script.starts_with("echo a"), "powershell: should start with first step, got: {script}");
+        assert!(
+            script.contains("Start-Sleep -Seconds 2"),
+            "powershell: should have delay after step 0, got: {script}"
+        );
+        assert!(
+            script.contains("Start-Sleep -Seconds 3"),
+            "powershell: should have delay after step 1, got: {script}"
+        );
+        assert!(
+            !script.contains("Start-Sleep -Seconds 0"),
+            "powershell: last step delay 0 should be absent, got: {script}"
+        );
+        assert!(
+            script.starts_with("echo a"),
+            "powershell: should start with first step, got: {script}"
+        );
     }
 
     #[test]
     fn build_chained_script_cmd_with_delays() {
         let steps = vec![
-            CommandStep { cmd: "dir".into(), delay_sec: 1, note: String::new() },
-            CommandStep { cmd: "echo done".into(), delay_sec: 5, note: String::new() },
+            CommandStep {
+                cmd: "dir".into(),
+                delay_sec: 1,
+                note: String::new(),
+            },
+            CommandStep {
+                cmd: "echo done".into(),
+                delay_sec: 5,
+                note: String::new(),
+            },
         ];
         let script = build_chained_script(&steps, "cmd");
-        assert!(script.contains("timeout /t 1 /nobreak"), "cmd: should have delay after step 0, got: {script}");
-        assert!(!script.contains("timeout /t 5"), "cmd: last step delay should be absent, got: {script}");
+        assert!(
+            script.contains("timeout /t 1 /nobreak"),
+            "cmd: should have delay after step 0, got: {script}"
+        );
+        assert!(
+            !script.contains("timeout /t 5"),
+            "cmd: last step delay should be absent, got: {script}"
+        );
     }
 
     #[test]
     fn build_chained_script_gitbash_single_no_delay() {
-        let steps = vec![
-            CommandStep { cmd: "ls -la".into(), delay_sec: 0, note: String::new() },
-        ];
+        let steps = vec![CommandStep {
+            cmd: "ls -la".into(),
+            delay_sec: 0,
+            note: String::new(),
+        }];
         let script = build_chained_script(&steps, "gitbash");
-        assert_eq!(script, "ls -la", "gitbash single step no delay should be just the command");
+        assert_eq!(
+            script, "ls -la",
+            "gitbash single step no delay should be just the command"
+        );
     }
 
     #[test]
     fn build_chained_script_gitbash_two_steps_no_delay() {
         let steps = vec![
-            CommandStep { cmd: "echo a".into(), delay_sec: 0, note: String::new() },
-            CommandStep { cmd: "echo b".into(), delay_sec: 0, note: String::new() },
+            CommandStep {
+                cmd: "echo a".into(),
+                delay_sec: 0,
+                note: String::new(),
+            },
+            CommandStep {
+                cmd: "echo b".into(),
+                delay_sec: 0,
+                note: String::new(),
+            },
         ];
         let script = build_chained_script(&steps, "gitbash");
-        assert_eq!(script, "echo a && echo b", "gitbash two steps no delay should use && between");
+        assert_eq!(
+            script, "echo a && echo b",
+            "gitbash two steps no delay should use && between"
+        );
     }
 
     #[test]
@@ -373,14 +576,35 @@ mod tests {
     #[test]
     fn build_chained_script_gitbash_with_delays() {
         let steps = vec![
-            CommandStep { cmd: "echo x".into(), delay_sec: 1, note: String::new() },
-            CommandStep { cmd: "echo y".into(), delay_sec: 2, note: String::new() },
-            CommandStep { cmd: "echo z".into(), delay_sec: 0, note: String::new() },
+            CommandStep {
+                cmd: "echo x".into(),
+                delay_sec: 1,
+                note: String::new(),
+            },
+            CommandStep {
+                cmd: "echo y".into(),
+                delay_sec: 2,
+                note: String::new(),
+            },
+            CommandStep {
+                cmd: "echo z".into(),
+                delay_sec: 0,
+                note: String::new(),
+            },
         ];
         let script = build_chained_script(&steps, "gitbash");
-        assert!(script.contains(" && sleep 1 && "), "gitbash: expected ' && sleep 1 && ', got: {script}");
-        assert!(script.contains(" && sleep 2 && "), "gitbash: expected ' && sleep 2 && ', got: {script}");
-        assert!(!script.contains("sleep 0"), "gitbash: last step delay 0 should not produce sleep");
+        assert!(
+            script.contains(" && sleep 1 && "),
+            "gitbash: expected ' && sleep 1 && ', got: {script}"
+        );
+        assert!(
+            script.contains(" && sleep 2 && "),
+            "gitbash: expected ' && sleep 2 && ', got: {script}"
+        );
+        assert!(
+            !script.contains("sleep 0"),
+            "gitbash: last step delay 0 should not produce sleep"
+        );
     }
 
     #[test]
@@ -398,12 +622,26 @@ mod tests {
     #[test]
     fn build_chained_script_wsl_with_delays() {
         let steps = vec![
-            CommandStep { cmd: "echo x".into(), delay_sec: 1, note: String::new() },
-            CommandStep { cmd: "echo y".into(), delay_sec: 2, note: String::new() },
+            CommandStep {
+                cmd: "echo x".into(),
+                delay_sec: 1,
+                note: String::new(),
+            },
+            CommandStep {
+                cmd: "echo y".into(),
+                delay_sec: 2,
+                note: String::new(),
+            },
         ];
         let script = build_chained_script(&steps, "wsl");
-        assert!(script.contains(" && sleep 1 && "), "wsl: expected ' && sleep 1 && ', got: {script}");
-        assert!(!script.contains("sleep 2"), "wsl: last step delay should be absent, got: {script}");
+        assert!(
+            script.contains(" && sleep 1 && "),
+            "wsl: expected ' && sleep 1 && ', got: {script}"
+        );
+        assert!(
+            !script.contains("sleep 2"),
+            "wsl: last step delay should be absent, got: {script}"
+        );
     }
 
     #[test]
@@ -427,16 +665,90 @@ mod tests {
         assert_eq!(args[2], "-lic",
             "wsl should use login+interactive shell (-lic) so ~/.profile AND ~/.bashrc both load; got args: {args:?}");
         let cmd = &args[3];
-        assert!(cmd.contains("\\; exec bash"),
-            "keep_open=true should append escaped '; exec bash'; got cmd: {cmd}");
-        assert!(cmd.starts_with("opencode"), "cmd should start with the user command; got: {cmd}");
+        assert!(
+            cmd.contains("\\; exec bash"),
+            "keep_open=true should append escaped '; exec bash'; got cmd: {cmd}"
+        );
+        assert!(
+            cmd.starts_with("opencode"),
+            "cmd should start with the user command; got: {cmd}"
+        );
 
         // keep_open=false: command passed through unchanged
         let (prog2, args2) = shell_invocation("wsl", "echo hi", false, false);
         assert_eq!(prog2, "wsl.exe");
-        assert_eq!(args2[2], "-lic",
-            "login+interactive flag must be present even when keep_open=false; got args: {args2:?}");
-        assert_eq!(args2[3], "echo hi",
-            "keep_open=false should pass command unchanged; got: {}", args2[4]);
+        assert_eq!(
+            args2[2], "-lic",
+            "login+interactive flag must be present even when keep_open=false; got args: {args2:?}"
+        );
+        assert_eq!(
+            args2[3], "echo hi",
+            "keep_open=false should pass command unchanged; got: {}",
+            args2[4]
+        );
+    }
+
+    #[test]
+    fn inject_marker_per_shell() {
+        let marker = "OSRUN-abc123def456";
+        assert_eq!(
+            inject_marker("echo hi", "powershell", marker),
+            format!("$null = '{}'; echo hi", marker)
+        );
+        assert_eq!(
+            inject_marker("echo hi", "cmd", marker),
+            format!("set \"OSRUN={}\" & echo hi", marker)
+        );
+        assert_eq!(
+            inject_marker("echo hi", "gitbash", marker),
+            format!("OSRUN='{}' && echo hi", marker)
+        );
+        assert_eq!(
+            inject_marker("echo hi", "wsl", marker),
+            format!("OSRUN='{}' && echo hi", marker)
+        );
+    }
+
+    #[test]
+    fn wt_tab_args_include_marker() {
+        let marker = "OSRUN-abc123def456";
+        let args = build_wt_tab_args_tracked("echo hi", "terminal", Some(marker)).unwrap();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains(marker),
+            "WT tab args should contain the injected marker, got: {joined}"
+        );
+        assert!(
+            joined.contains("echo hi"),
+            "WT tab args should contain the command"
+        );
+    }
+
+    #[test]
+    fn shell_invocation_gitbash_wt_keep_uses_child_bash() {
+        // WT keep-open must keep the outer bash alive (it carries the marker),
+        // so use a child `bash` rather than `exec bash`.
+        let (prog, args) = shell_invocation("gitbash", "echo hi", true, true);
+        assert!(
+            prog.to_lowercase().contains("bash"),
+            "expected a bash program, got {prog}"
+        );
+        let cmd = &args[1];
+        assert!(
+            cmd.contains("\\; bash"),
+            "WT keep-open should use a child bash, got: {cmd}"
+        );
+        assert!(
+            !cmd.contains("exec bash"),
+            "WT keep-open must not exec over the marker-carrying shell, got: {cmd}"
+        );
+
+        // Standalone gitbash launches keep the existing `exec bash` behavior.
+        let (_prog, direct) = shell_invocation("gitbash", "echo hi", true, false);
+        assert!(
+            direct[1].contains("; exec bash"),
+            "standalone gitbash should keep 'exec bash', got: {}",
+            direct[1]
+        );
     }
 }

@@ -28,8 +28,17 @@ winreg = "0.52"
 log = "0.4"
 dirs = "5"
 ureq = { version = "2", features = ["json"] }
-windows = { version = "0.58", features = ["Win32_System_Threading", "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Security"] }
+windows = { version = "0.58", features = ["Win32_System_Threading", "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Security", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Console", "Wdk_System_Threading"] }
 
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+# MSVC 14.41 can fail with D8050 ("failed to put command line into debug
+# record") while compiling the C parts of these crates with /Z7. Disable debug
+# info for their native build scripts; pdao uses the same workaround for SQLite.
+[profile.dev.package.ring]
+debug = false
+
+[profile.dev.package.libsqlite3-sys]
+debug = false
